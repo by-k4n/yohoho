@@ -11,7 +11,8 @@ def test_build_chimes_shapes_dtype_and_full_scale():
         assert np.max(np.abs(buf)) <= 1.0
     # Normalised together to full scale: the louder of the two peaks at ~1.0.
     assert np.isclose(max(np.max(np.abs(start)), np.max(np.abs(end))), 1.0, atol=1e-3)
-    assert len(end) > len(start)  # C5 tail (0.28s) is longer than the G5 (0.24s)
+    # start and end are the same motif reversed, so they share length.
+    assert len(start) == len(end)
 
 
 def test_build_chimes_is_deterministic():

@@ -1,9 +1,10 @@
 """On/off dictation chimes — synthesised in code (no audio assets in the repo).
 
-The sound is a warm electric-piano ("Rhodes") tine layered with a short, low,
-*non-tonal* body transient (the "tuh") for haptic weight.  Recording-start is a
-G5 tine, recording-done is a resolved C5 (a descending perfect fourth, so "on"
-and "off" are unmistakable).  These exact parameters were dialled in by ear.
+The sound is a three-note "yo-ho-ho" motif — a nod to Brook's laugh (and the
+project's name) — on warm electric-piano ("Rhodes") tines, layered with a short,
+low, *non-tonal* body transient (the "tuh") for haptic weight.  It rises
+(C5–E5–G5) when recording starts and falls (G5–E5–C5) when it finishes, so "on"
+and "off" are unmistakable.  Kept short so it stays snappy.
 
 Playback goes through ``sounddevice`` (the same library the recorder uses), so it
 is non-blocking and cross-platform.  A chime is always best-effort: any audio
@@ -19,9 +20,11 @@ import numpy as np
 
 SAMPLE_RATE = 44100
 
-# Locked tine pitches (Hz): G5 on, C5 off.
-_START_HZ = 784.0
-_END_HZ = 523.25
+# A three-note "yo-ho-ho" motif — a nod to Brook's laugh (and the project's name).
+# It rises (C5–E5–G5) when recording starts and falls (G5–E5–C5) when it finishes,
+# so "on" and "off" are unmistakable. Each note is short, so the whole chime stays snappy.
+_MOTIF_HZ = (523.25, 659.25, 783.99)  # C5, E5, G5
+_NOTE_DUR = 0.085
 
 
 def _soft_env(n: int, attack: float = 0.009, decay: float = 7.5) -> np.ndarray:
@@ -81,8 +84,13 @@ def build_chimes(seed: int = 7) -> tuple[np.ndarray, np.ndarray]:
     there.  Deterministic (the only randomness is the seeded 'tuh' texture).
     """
     rng = np.random.RandomState(seed)
-    start = _layer(_rhodes(_START_HZ, 0.24), _tuh(rng, f=82))
-    end = _layer(_rhodes(_END_HZ, 0.28), _tuh(rng, f=74))
+
+    def _motif(notes) -> np.ndarray:
+        tine = np.concatenate([_rhodes(f, _NOTE_DUR) for f in notes])
+        return _layer(tine, _tuh(rng, f=82))  # tuh grounds the first note with body
+
+    start = _motif(_MOTIF_HZ)               # C5–E5–G5 rising  ("on")
+    end = _motif(tuple(reversed(_MOTIF_HZ)))  # G5–E5–C5 falling ("off")
     peak = max(np.max(np.abs(start)), np.max(np.abs(end))) or 1.0
     scale = 1.0 / peak
     return (start * scale).astype(np.float32), (end * scale).astype(np.float32)
