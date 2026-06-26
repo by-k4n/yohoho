@@ -201,6 +201,28 @@ def test_grid_hidden_during_close_and_restored_on_recording():
 
 
 @pytest.mark.gui
+def test_panel_calls_window_chrome_style_window_during_build():
+    import tkinter
+    from yohoho.core.ui.panel import StatusPanel
+    from yohoho.core.ui.panel_model import PanelModel
+
+    calls = []
+    class SpyChrome:
+        def set_app_policy(self): pass
+        def style_window(self, root, toplevel, canvas):
+            calls.append((toplevel, canvas))
+
+    try:
+        root = tkinter.Tk()
+    except tkinter.TclError as e:
+        pytest.skip(f"no Tk/display: {e}")
+    root.withdraw()
+    StatusPanel(root, PanelModel(columns=44, rows=7), window_chrome=SpyChrome())
+    assert len(calls) == 1
+    root.destroy()
+
+
+@pytest.mark.gui
 def test_timer_and_percent_mutually_exclusive():
     """timer_id and pct_id must never overlap: timer hidden when % shown and vice versa."""
     import tkinter

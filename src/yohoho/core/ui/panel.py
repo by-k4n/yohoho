@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import tkinter
 import tkinter.font
+from typing import Optional
 
 from yohoho.core.ui import theme
 from yohoho.core.ui.fonts import PANEL_FONT_ASSET, install_font, resolve_family
@@ -36,7 +37,7 @@ from yohoho.core.ui.panel_model import (
     rec_on,
 )
 from yohoho.core.events import Terminal
-from yohoho.platform.macos_window import apply_chrome, enable_round
+from yohoho.core.platform_api import WindowChrome, NullWindowChrome
 
 # Panel size (single-row pill).
 _WIDTH = 280
@@ -92,12 +93,13 @@ class StatusPanel:
     """Always-on-top dot-matrix status window driven by a :class:`PanelModel`."""
 
     def __init__(
-        self, root: tkinter.Tk, model: PanelModel, *, width: int = _WIDTH, height: int = _HEIGHT
+        self, root: tkinter.Tk, model: PanelModel, *, width: int = _WIDTH, height: int = _HEIGHT, window_chrome: Optional[WindowChrome] = None
     ) -> None:
         self.root = root
         self.model = model
         self.width = width
         self.height = height
+        self._window_chrome = window_chrome or NullWindowChrome()
         self._build()
         # Start hidden: _build leaves the window MAPPED but parked off-screen.
         # We never withdraw()/deiconify() — on macOS deiconify activates the app,
@@ -250,13 +252,8 @@ class StatusPanel:
             state="hidden",
         )
 
-        # --- Chrome -------------------------------------------------------
-        apply_chrome(self.root, self.top)
-
-        # --- Transparent rounded corners (macOS) --------------------------
-        # Must be called AFTER apply_chrome/overrideredirect to avoid a Tk
-        # bug where -transparent conflicts with the overrideredirect bool return.
-        enable_round(self.top, self.canvas)
+        # --- Chrome (platform-specific, via the WindowChrome seam) --------
+        self._window_chrome.style_window(self.root, self.top, self.canvas)
 
         # --- Show/hide geometries (visibility = move, never withdraw) ------
         # On macOS, withdraw()/deiconify() ACTIVATE the app, stealing key focus
