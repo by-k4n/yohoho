@@ -4,6 +4,7 @@ plus a graceful family-fallback chain."""
 from __future__ import annotations
 
 import shutil
+import sys
 from pathlib import Path
 
 # src/yohoho/core/ui/fonts.py -> parents[2] == src/yohoho
@@ -14,10 +15,25 @@ PANEL_FONT_ASSET = Path(__file__).resolve().parents[2] / "assets" / "fonts" / "D
 _PREFERRED = ("Doto", "Menlo")
 
 
-def install_font(src: Path, dest_dir: Path | None = None) -> Path:
-    """Copy the bundled font into the user font dir so Tk resolves it by family
-    name. Idempotent: skips the copy if an identical file is already there.
-    macOS uses ~/Library/Fonts (writable, no admin)."""
+def _real_register_win_font(src: Path) -> None:
+    import ctypes
+    FR_PRIVATE = 0x10
+    ctypes.windll.gdi32.AddFontResourceExW(str(src), FR_PRIVATE, 0)
+
+
+def install_font(
+    src: Path,
+    dest_dir: Path | None = None,
+    *,
+    platform: str = sys.platform,
+    register_fn=_real_register_win_font,
+) -> Path:
+    """Make the bundled font resolvable by family name for this interpreter.
+    win32: register the TTF process-locally with GDI (AddFontResourceExW, FR_PRIVATE) — there is no
+           stock-tkinter API to load a font file. macOS/posix: copy into ~/Library/Fonts (writable)."""
+    if platform == "win32":
+        register_fn(src)
+        return src
     if dest_dir is None:
         dest_dir = Path.home() / "Library" / "Fonts"
     dest_dir.mkdir(parents=True, exist_ok=True)
