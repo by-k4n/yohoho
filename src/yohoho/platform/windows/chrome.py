@@ -46,12 +46,16 @@ class WindowsWindowChrome:
         except Exception:  # noqa: BLE001
             pass
         try:
-            toplevel.update_idletasks()  # the native wrapper must exist before we resolve it
+            # -alpha FIRST: Tk recomputes GWL_EXSTYLE when it sets up layering, clobbering foreign
+            # ex-style bits — so set translucency, THEN resolve the wrapper and apply our ex-styles
+            # LAST, so WS_EX_NOACTIVATE/TOOLWINDOW survive (verified on real Windows).
+            toplevel.update_idletasks()                 # realize the native wrapper after overrideredirect
+            toplevel.attributes("-alpha", self._alpha)  # uniform translucency; Tk sets WS_EX_LAYERED
+            toplevel.update_idletasks()                 # realize again after the alpha restyle
             child = toplevel.winfo_id()
-            hwnd = self._w.get_ancestor_root(child)  # the real top-level wrapper (NOT winfo_id)
-            self._w.add_ex_styles(hwnd, _WS_EX_NOACTIVATE | _WS_EX_LAYERED | _WS_EX_TOOLWINDOW)
-            toplevel.attributes("-alpha", self._alpha)  # uniform translucency (targets the wrapper)
+            hwnd = self._w.get_ancestor_root(child)     # the real top-level wrapper (NOT winfo_id)
+            self._w.add_ex_styles(hwnd, _WS_EX_NOACTIVATE | _WS_EX_LAYERED | _WS_EX_TOOLWINDOW)  # last → survives -alpha
             w, h = canvas.winfo_reqwidth(), canvas.winfo_reqheight()
-            self._w.set_round_region(hwnd, w, h)  # PRIMARY pill shape on all Windows versions
+            self._w.set_round_region(hwnd, w, h)        # PRIMARY pill shape on all Windows versions
         except Exception:  # noqa: BLE001 — degrade to the plain borderless window set above
             pass

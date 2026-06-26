@@ -49,3 +49,24 @@ def test_style_window_degrades_on_win32_error():
 
 def test_set_app_policy_is_noop():
     WindowsWindowChrome(win32=_FakeWin32()).set_app_policy()  # must not raise
+
+
+def test_alpha_applied_before_ex_styles():
+    # Tk's -alpha recomputes GWL_EXSTYLE and clobbers foreign ex-style bits, so our add_ex_styles
+    # (WS_EX_NOACTIVATE / WS_EX_TOOLWINDOW) MUST run AFTER -alpha. Pin that ordering so it can't regress.
+    events = []
+
+    class _RecTop(_FakeTop):
+        def attributes(self, *a):
+            events.append(("attributes",) + a)
+            super().attributes(*a)
+
+    class _RecWin32(_FakeWin32):
+        def add_ex_styles(self, hwnd, styles):
+            events.append(("add_ex_styles", hwnd, styles))
+            super().add_ex_styles(hwnd, styles)
+
+    WindowsWindowChrome(win32=_RecWin32()).style_window(root=object(), toplevel=_RecTop(), canvas=_FakeCanvas())
+    alpha_idx = next(i for i, e in enumerate(events) if e[0] == "attributes" and len(e) > 1 and e[1] == "-alpha")
+    exstyle_idx = next(i for i, e in enumerate(events) if e[0] == "add_ex_styles")
+    assert alpha_idx < exstyle_idx, f"-alpha must precede add_ex_styles; events={events}"
