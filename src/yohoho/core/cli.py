@@ -179,6 +179,7 @@ def run_dictate(
     import threading
     import tkinter as tk
 
+    from yohoho.core.platform_factory import get_platform  # noqa: PLC0415
     import yohoho.core.ui  # noqa: F401  — applies the Tcl env shim on import
     from yohoho.core.ui.panel import StatusPanel
     from yohoho.core.ui.panel_model import PanelModel, level_from_raw
@@ -187,7 +188,8 @@ def run_dictate(
     root = tk.Tk()
     root.withdraw()
     model = PanelModel(columns=44, rows=7)
-    panel = StatusPanel(root, model)
+    _chrome = get_platform().window_chrome                         # real OS chrome for the panel
+    panel = StatusPanel(root, model, window_chrome=_chrome)
     q: "queue.Queue[dict]" = queue.Queue()
 
     def _worker() -> None:
@@ -242,7 +244,7 @@ def run_dictate(
         if runner is not None:
             runner.stop()
 
-    runner = PanelRunner(root, panel, model, q, on_done=_on_done)
+    runner = PanelRunner(root, panel, model, q, on_done=_on_done, window_chrome=_chrome)
     threading.Thread(target=_worker, daemon=True).start()
     runner.run()  # blocks on the main thread until stop()
 
@@ -264,6 +266,7 @@ def run_panel_demo(cycle: bool, state: Optional[str], seconds: int) -> None:
     import threading
     import tkinter as tk
 
+    from yohoho.core.platform_factory import get_platform  # noqa: PLC0415
     import yohoho.core.ui  # noqa: F401  — applies the Tcl env shim on import
     from yohoho.core.ui.panel import StatusPanel
     from yohoho.core.ui.panel_model import PanelModel
@@ -272,7 +275,8 @@ def run_panel_demo(cycle: bool, state: Optional[str], seconds: int) -> None:
     root = tk.Tk()
     root.withdraw()
     model = PanelModel(columns=44, rows=7)
-    panel = StatusPanel(root, model)
+    _chrome = get_platform().window_chrome                         # real OS chrome for the panel
+    panel = StatusPanel(root, model, window_chrome=_chrome)
     q: "queue.Queue[dict]" = queue.Queue()
 
     def produce() -> None:
@@ -306,7 +310,7 @@ def run_panel_demo(cycle: bool, state: Optional[str], seconds: int) -> None:
             time.sleep(0.6)
 
     threading.Thread(target=produce, daemon=True).start()
-    PanelRunner(root, panel, model, q).run()
+    PanelRunner(root, panel, model, q, window_chrome=_chrome).run()
 
 
 # ---------------------------------------------------------------------------

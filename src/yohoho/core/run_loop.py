@@ -90,7 +90,8 @@ def run_start_loop(data_dir) -> None:
     root = tk.Tk()
     root.withdraw()
     model = PanelModel(columns=44, rows=7)
-    panel = StatusPanel(root, model)
+    plat = get_platform()                                          # one lookup, reused below
+    panel = StatusPanel(root, model, window_chrome=plat.window_chrome)
     q: "queue.Queue[dict]" = queue.Queue()
 
     # ------------------------------------------------------------------ worker
@@ -103,7 +104,7 @@ def run_start_loop(data_dir) -> None:
     # rendering aborts the process (SIGTRAP). marshal_bundle routes those calls
     # through the executor, which the runner's drain loop runs on THIS main thread.
     executor = MainThreadExecutor()
-    bundle = marshal_bundle(get_platform(), executor)
+    bundle = marshal_bundle(plat, executor)                        # reuse plat (was get_platform())
     # On/off chimes (synth built once here; playback is non-blocking + best-effort).
     from yohoho.core.sounds import ChimePlayer
     chimes = ChimePlayer(enabled=cfg.sounds["enabled"], volume=cfg.sounds["volume"])
@@ -179,7 +180,8 @@ def run_start_loop(data_dir) -> None:
     #   `yohoho stop` / launchctl SIGTERM — kills the process immediately via
     #     Python's default SIGTERM handler; the daemon listener dies with it;
     #     the `finally` block does NOT run.
-    runner = PanelRunner(root, panel, model, q, executor=executor)
+    runner = PanelRunner(root, panel, model, q, executor=executor,
+                         window_chrome=plat.window_chrome)
 
     # Main-thread platform prep BEFORE the worker arms the listener: on macOS the
     # pynput listener thread calls a main-thread-only keyboard API, which SIGTRAPs
