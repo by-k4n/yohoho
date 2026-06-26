@@ -10,7 +10,7 @@ _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
 class _RealRegistry:
     def set_value(self, name: str, data: str) -> None:
         import winreg
-        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, _RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
             winreg.SetValueEx(k, name, 0, winreg.REG_SZ, data)
 
     def get_value(self, name: str) -> Optional[str]:
