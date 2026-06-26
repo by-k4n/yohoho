@@ -1,5 +1,4 @@
 # tests/unit/test_platform_api_chrome.py
-import dataclasses
 from yohoho.core import platform_api as pa
 from yohoho.core.ui.main_thread import MainThreadExecutor, marshal_bundle
 from yohoho.core.null_platform import make_null_platform
