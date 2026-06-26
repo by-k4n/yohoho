@@ -1,5 +1,5 @@
 import pytest
-from yohoho.platform.macos.chords import ChordMatcher, parse_spec, normalize_id
+from yohoho.platform._shared.chords import ChordMatcher, parse_spec, normalize_id
 
 
 def test_parse_spec_to_required_ids():

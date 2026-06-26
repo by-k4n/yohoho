@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Optional
-from yohoho.platform.macos.chords import ChordMatcher, parse_spec
+from yohoho.platform._shared.chords import ChordMatcher, parse_spec
 
 
 def _key_id(key) -> str:
