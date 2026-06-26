@@ -83,6 +83,30 @@ class PermissionsManager(Protocol):
     def guide(self) -> str: ...
 
 
+@runtime_checkable
+class WindowChrome(Protocol):
+    """Process- and window-level styling for the status panel (the only OS-specific UI seam)."""
+
+    def set_app_policy(self) -> None: ...  # process-level (mac: accessory; win/null: no-op)
+
+    def style_window(self, root, toplevel, canvas) -> None: ...  # borderless/topmost/non-activating/round
+
+
+class NullWindowChrome:
+    """Plain borderless top-most window; no platform tricks. Used by the null platform and as
+    the headless default so existing PlatformBundle/StatusPanel/PanelRunner constructions stay valid."""
+
+    def set_app_policy(self) -> None:
+        pass
+
+    def style_window(self, root, toplevel, canvas) -> None:
+        try:
+            toplevel.overrideredirect(True)
+            toplevel.attributes("-topmost", True)
+        except Exception:  # noqa: BLE001 — never crash the panel on chrome
+            pass
+
+
 @dataclass(frozen=True)
 class PlatformBundle:
     name: str
