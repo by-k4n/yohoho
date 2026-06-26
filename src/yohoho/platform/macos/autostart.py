@@ -58,7 +58,10 @@ class MacAutostart:
         self._label = label
         self._args = program_args or []
         self._plist = Path(plist_path) if plist_path else _default_plist_path(label)
-        self._uid = uid if uid is not None else os.getuid()
+        # os.getuid() is POSIX-only; on Windows the macOS bundle is never actually
+        # run (launchctl absent), but it must still be *constructible* for cross-platform
+        # imports/tests — fall back to 0 there. macOS behavior is unchanged.
+        self._uid = uid if uid is not None else (os.getuid() if hasattr(os, "getuid") else 0)
         self._run = run
         self._target = f"gui/{self._uid}/{self._label}"
         if log_dir is not None:

@@ -19,7 +19,10 @@ def test_fake_engine_can_simulate_slow_call():
     e.load()
     t = time.monotonic()
     e.recognize(b"\x00" * 16000, 16000)
-    assert time.monotonic() - t >= 0.05
+    # Tolerate OS clock granularity (Windows time.monotonic ~15ms can make a 50ms
+    # sleep measure slightly short): assert the delay path ran and took most of the
+    # configured time, not the exact value.
+    assert time.monotonic() - t >= 0.035
 
 
 def test_fake_engine_raise_on_load():
