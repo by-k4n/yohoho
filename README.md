@@ -85,8 +85,7 @@ runtime by `platform_factory`. Engine: NVIDIA Parakeet TDT 0.6b v2 (int8 ONNX) v
 Tkinter dot-matrix panel. Output: clipboard paste (lossless, unlike per-key typing).
 
 The full design is in [`docs/DESIGN.md`](docs/DESIGN.md); the 149-case failure-mode matrix is in
-[`docs/edge-cases.md`](docs/edge-cases.md); deferred review follow-ups are in
-[`docs/m4-followups.md`](docs/m4-followups.md).
+[`docs/edge-cases.md`](docs/edge-cases.md).
 
 ## Roadmap
 
