@@ -27,7 +27,7 @@ from yohoho.core.ui.events import apply_event
 from yohoho.core.ui.main_thread import MainThreadExecutor
 from yohoho.core.ui.panel import StatusPanel
 from yohoho.core.ui.panel_model import PanelModel
-from yohoho.platform.macos_window import set_accessory_policy
+from yohoho.core.platform_api import WindowChrome, NullWindowChrome
 
 # After-loop intervals (ms).
 _DRAIN_MS = 40
@@ -69,6 +69,7 @@ class PanelRunner:
         *,
         on_done: Optional[Callable[[], None]] = None,
         executor: Optional[MainThreadExecutor] = None,
+        window_chrome: Optional[WindowChrome] = None,
     ) -> None:
         self.root = root
         self.panel = panel
@@ -79,6 +80,7 @@ class PanelRunner:
         # effects (paste / clipboard / focus) here; the drain loop runs them on
         # this (main) thread so they never race the panel's render. See M3 crash.
         self._executor = executor
+        self._window_chrome = window_chrome or NullWindowChrome()
 
         self._drain_id: Optional[str] = None
         self._tick_id: Optional[str] = None
@@ -100,7 +102,7 @@ class PanelRunner:
         ONCE (so the panel never steals focus), starts the drain + tick + signal
         after-loops, then blocks in ``mainloop()`` until ``stop()``.
         """
-        set_accessory_policy()
+        self._window_chrome.set_app_policy()
 
         # Ctrl+C: Tk's mainloop doesn't reliably deliver SIGINT on macOS, so the
         # handler only flips a flag and a polled after-loop performs the actual

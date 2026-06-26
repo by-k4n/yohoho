@@ -242,3 +242,78 @@ def test_stop_is_idempotent():
     runner.stop()
     runner.stop()
     assert ex.shutdowns == 1                                   # second stop is a no-op
+
+
+# ---------------------------------------------------------------------------
+# A5: window_chrome seam — PanelRunner calls window_chrome.set_app_policy()
+# ---------------------------------------------------------------------------
+
+
+def test_runner_invokes_window_chrome_set_app_policy_once():
+    """run() applies the app policy via the chrome seam exactly once (no Tk needed)."""
+    import queue
+    import signal
+    from yohoho.core.ui.runner import PanelRunner
+
+    class _FakeRoot:
+        def after(self, *a, **k):
+            return "after-id"
+        def after_cancel(self, *a, **k):
+            pass
+        def mainloop(self):
+            pass
+        def quit(self):
+            pass
+        def destroy(self):
+            pass
+
+    class _SpyChrome:
+        def __init__(self):
+            self.policy_calls = 0
+        def set_app_policy(self):
+            self.policy_calls += 1
+        def style_window(self, root, toplevel, canvas):
+            pass
+
+    spy = _SpyChrome()
+    old_sigint = signal.getsignal(signal.SIGINT)
+    try:
+        runner = PanelRunner(_FakeRoot(), object(), object(), queue.Queue(), window_chrome=spy)
+        runner.run()
+        assert spy.policy_calls == 1
+    finally:
+        signal.signal(signal.SIGINT, old_sigint)
+
+
+@pytest.mark.gui
+def test_runner_calls_window_chrome_set_app_policy_on_run(monkeypatch):
+    """run() calls set_app_policy() exactly once via the chrome seam (real Tk)."""
+    import queue
+    import tkinter
+
+    import yohoho.core.ui  # noqa: F401  — Tcl env shim
+    from yohoho.core.ui.panel import StatusPanel
+    from yohoho.core.ui.panel_model import PanelModel
+    from yohoho.core.ui.runner import PanelRunner
+
+    class SpyChrome:
+        def __init__(self):
+            self.policy_calls = 0
+        def set_app_policy(self):
+            self.policy_calls += 1
+        def style_window(self, root, toplevel, canvas):
+            pass
+
+    try:
+        root = tkinter.Tk()
+    except tkinter.TclError as e:
+        pytest.skip(f"no Tk/display: {e}")
+    root.withdraw()
+    model = PanelModel(columns=44, rows=7)
+    panel = StatusPanel(root, model)
+    spy = SpyChrome()
+    runner = PanelRunner(root, panel, model, queue.Queue(), window_chrome=spy)
+    monkeypatch.setattr(root, "mainloop", lambda: None)
+    runner.run()
+    assert spy.policy_calls == 1
+    root.destroy()
