@@ -1,0 +1,94 @@
+from __future__ import annotations
+from typing import Protocol, runtime_checkable, Callable, Literal, Optional
+from dataclasses import dataclass
+
+# Normalized OS-agnostic hotkey, stored in config: lowercase, '+'-joined, modifiers first.
+HotkeySpec = str  # e.g. 'ctrl+alt+space', 'f14'
+ActivateCallback = Callable[[], None]
+
+
+@dataclass(frozen=True)
+class FocusToken:
+    gen: int
+    app_id: str = "null"
+    valid: bool = True
+
+
+@runtime_checkable
+class HotkeyListener(Protocol):
+    def configure(
+        self,
+        spec: HotkeySpec,
+        on_activate: ActivateCallback,
+        on_cancel: Optional[ActivateCallback] = None,
+    ) -> None: ...
+    def start(self) -> None: ...
+    def stop(self) -> None: ...
+    def is_alive(self) -> bool: ...
+    @staticmethod
+    def is_valid_spec(spec: HotkeySpec) -> bool: ...
+
+
+@runtime_checkable
+class Clipboard(Protocol):
+    def get_text(self) -> Optional[str]: ...
+    def set_text(self, text: str) -> None: ...
+    def has_nontext(self) -> bool: ...
+
+
+@runtime_checkable
+class TextInjector(Protocol):
+    # token: the record-stop focus snapshot. Adapters that must re-target the
+    # original app before pasting (macOS) use it; others may ignore it.
+    def paste(self, token: Optional["FocusToken"] = None) -> bool: ...
+    def release_modifiers(self) -> None: ...
+
+
+@runtime_checkable
+class FocusProbe(Protocol):
+    def snapshot(self) -> FocusToken: ...
+    def unchanged(self, token: FocusToken) -> bool: ...
+
+
+@runtime_checkable
+class AutostartManager(Protocol):
+    def enable(self) -> bool: ...   # True iff autostart is active afterward
+    def disable(self) -> None: ...
+    def is_enabled(self) -> bool: ...
+
+
+PermState = Literal["granted", "denied", "not_applicable", "unknown"]
+
+
+@dataclass(frozen=True)
+class Permission:
+    key: str
+    state: PermState
+    label: str
+    fix_hint: str
+    deep_link: str = ""
+
+
+@dataclass(frozen=True)
+class PermissionStatus:
+    ok: bool
+    permissions: tuple[Permission, ...]
+    identity_ok: bool = True
+
+
+@runtime_checkable
+class PermissionsManager(Protocol):
+    def check(self) -> PermissionStatus: ...
+    def request(self) -> None: ...
+    def guide(self) -> str: ...
+
+
+@dataclass(frozen=True)
+class PlatformBundle:
+    name: str
+    hotkeys: HotkeyListener
+    clipboard: Clipboard
+    injector: TextInjector
+    focus: FocusProbe
+    autostart: AutostartManager
+    permissions: PermissionsManager

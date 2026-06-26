@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node (install wrapper)
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
+# Models & caches (downloaded at runtime, never committed)
+*.onnx
+models/
+.cache/
+.huggingface/
+
+# Env / secrets
+.env
+.env.*
+
+# Bundled fonts are tracked deliberately; ignore stray downloads
+*.ttf.download
+
+# OS cruft
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Claude local-only settings
+.claude/settings.local.json
+
+# yohoho runtime model cache (downloaded at runtime, never committed)
+hf/
+
+# brainstorming visual-companion artifacts
+.superpowers/
+
+# Private dev/process docs — excluded from the public repo (kept locally)
+/CLAUDE.md
+/.claude/
+/docs/superpowers/
+/docs/plans/
+/docs/specs/
+/docs/m4-followups.md
+/docs/HANDOFF.md
+/docs/README.md
