@@ -314,6 +314,8 @@ def test_runner_calls_window_chrome_set_app_policy_on_run(monkeypatch):
     spy = SpyChrome()
     runner = PanelRunner(root, panel, model, queue.Queue(), window_chrome=spy)
     monkeypatch.setattr(root, "mainloop", lambda: None)
-    runner.run()
-    assert spy.policy_calls == 1
-    root.destroy()
+    try:
+        runner.run()
+        assert spy.policy_calls == 1
+    finally:
+        root.destroy()

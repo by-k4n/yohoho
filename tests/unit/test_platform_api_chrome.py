@@ -28,12 +28,22 @@ def test_null_chrome_style_window_makes_plain_borderless_topmost():
     top = _FakeTop()
     pa.NullWindowChrome().style_window(root=object(), toplevel=top, canvas=object())
     assert ("overrideredirect", True) in top.calls
-    assert any(c[0] == "attributes" and c[1][0] == "-topmost" for c in top.calls)
+    assert any(c[0] == "attributes" and c[1] == ("-topmost", True) for c in top.calls)
 
 
 def test_bundle_defaults_window_chrome_to_null():
     b = make_null_platform()
     assert isinstance(b.window_chrome, pa.NullWindowChrome)
+
+
+def test_null_chrome_style_window_swallows_exceptions():
+    class _RaisingTop:
+        def overrideredirect(self, v):
+            raise RuntimeError("chrome boom")
+        def attributes(self, *a):
+            raise RuntimeError("chrome boom")
+    # must not raise
+    pa.NullWindowChrome().style_window(root=object(), toplevel=_RaisingTop(), canvas=object())
 
 
 def test_marshal_bundle_preserves_window_chrome():

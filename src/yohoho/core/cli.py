@@ -180,7 +180,7 @@ def run_dictate(
     import tkinter as tk
 
     from yohoho.core.platform_factory import get_platform  # noqa: PLC0415
-    import yohoho.core.ui  # noqa: F401  — applies the Tcl env shim on import
+    import yohoho.core.ui  # noqa: F401  — applies the Tcl env shim and DPI-awareness hook on import
     from yohoho.core.ui.panel import StatusPanel
     from yohoho.core.ui.panel_model import PanelModel, level_from_raw
     from yohoho.core.ui.runner import PanelRunner
@@ -267,7 +267,7 @@ def run_panel_demo(cycle: bool, state: Optional[str], seconds: int) -> None:
     import tkinter as tk
 
     from yohoho.core.platform_factory import get_platform  # noqa: PLC0415
-    import yohoho.core.ui  # noqa: F401  — applies the Tcl env shim on import
+    import yohoho.core.ui  # noqa: F401  — applies the Tcl env shim and DPI-awareness hook on import
     from yohoho.core.ui.panel import StatusPanel
     from yohoho.core.ui.panel_model import PanelModel
     from yohoho.core.ui.runner import TICK_S, PanelRunner, demo_events

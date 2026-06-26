@@ -22,7 +22,6 @@ def test_resolve_family_prefers_doto_then_menlo():
 
 
 def test_install_font_win32_registers_instead_of_copying(tmp_path):
-    from yohoho.core.ui.fonts import install_font
     src = tmp_path / "Doto.ttf"
     src.write_bytes(b"ttf-bytes")
     registered = []
@@ -31,7 +30,6 @@ def test_install_font_win32_registers_instead_of_copying(tmp_path):
 
 
 def test_install_font_posix_still_copies(tmp_path):
-    from yohoho.core.ui.fonts import install_font
     src = tmp_path / "Doto.ttf"
     src.write_bytes(b"ttf-bytes")
     dest_dir = tmp_path / "fonts"

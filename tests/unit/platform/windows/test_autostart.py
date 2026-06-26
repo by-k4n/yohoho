@@ -15,7 +15,7 @@ class FakeRegistry:
 
 def test_enable_writes_quoted_pythonw_command_and_reads_back_true():
     reg = FakeRegistry()
-    a = WindowsAutostart(program_args=[r"C:\\venv\\Scripts\\pythonw.exe", "-m", "yohoho", "start"],
+    a = WindowsAutostart(program_args=[r"C:\venv\Scripts\pythonw.exe", "-m", "yohoho", "start"],
                          registry=reg)
     assert a.enable() is True
     val = reg.values["yohoho"]

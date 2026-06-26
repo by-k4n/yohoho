@@ -98,9 +98,10 @@ class PanelRunner:
     def run(self) -> None:
         """Enter the Tk run-loop on the CURRENT (main) thread.
 
-        Must be called from the main thread.  Applies the macOS accessory policy
-        ONCE (so the panel never steals focus), starts the drain + tick + signal
-        after-loops, then blocks in ``mainloop()`` until ``stop()``.
+        Must be called from the main thread.  Applies the platform window policy
+        via the window_chrome seam ONCE (so the panel never steals focus), starts
+        the drain + tick + signal after-loops, then blocks in ``mainloop()`` until
+        ``stop()``.
         """
         self._window_chrome.set_app_policy()
 
