@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Protocol, runtime_checkable, Callable, Literal, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # Normalized OS-agnostic hotkey, stored in config: lowercase, '+'-joined, modifiers first.
 HotkeySpec = str  # e.g. 'ctrl+alt+space', 'f14'
@@ -116,3 +116,4 @@ class PlatformBundle:
     focus: FocusProbe
     autostart: AutostartManager
     permissions: PermissionsManager
+    window_chrome: WindowChrome = field(default_factory=NullWindowChrome)

@@ -1,5 +1,8 @@
 # tests/unit/test_platform_api_chrome.py
+import dataclasses
 from yohoho.core import platform_api as pa
+from yohoho.core.ui.main_thread import MainThreadExecutor, marshal_bundle
+from yohoho.core.null_platform import make_null_platform
 
 
 class _FakeTop:
@@ -27,3 +30,14 @@ def test_null_chrome_style_window_makes_plain_borderless_topmost():
     pa.NullWindowChrome().style_window(root=object(), toplevel=top, canvas=object())
     assert ("overrideredirect", True) in top.calls
     assert any(c[0] == "attributes" and c[1][0] == "-topmost" for c in top.calls)
+
+
+def test_bundle_defaults_window_chrome_to_null():
+    b = make_null_platform()
+    assert isinstance(b.window_chrome, pa.NullWindowChrome)
+
+
+def test_marshal_bundle_preserves_window_chrome():
+    b = make_null_platform()
+    marshalled = marshal_bundle(b, MainThreadExecutor())
+    assert marshalled.window_chrome is b.window_chrome
