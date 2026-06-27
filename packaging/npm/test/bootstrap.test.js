@@ -36,8 +36,15 @@ test('ensureUv: installs uv when absent, throws if install fails', () => {
 test('ensureUv: installs uv when absent and succeeds silently', () => {
   const calls = [];
   const run = (cmd) => { calls.push(cmd); return { status: cmd === 'uv' ? 1 : 0 }; };
-  assert.doesNotThrow(() => b.ensureUv({ run, log: () => {} }));
+  assert.doesNotThrow(() => b.ensureUv({ run, log: () => {}, platform: 'darwin' }));
   assert.ok(calls.includes('sh'));
+});
+
+test('ensureUv: uses the PowerShell installer on Windows', () => {
+  const calls = [];
+  const run = (cmd) => { calls.push(cmd); return { status: cmd === 'uv' ? 1 : 0 }; };
+  assert.doesNotThrow(() => b.ensureUv({ run, log: () => {}, platform: 'win32' }));
+  assert.ok(calls.includes('powershell') && !calls.includes('sh'));
 });
 
 test('installPinned: installs yohoho==version from PyPI with --force (reconciles version skew)', () => {
@@ -46,7 +53,14 @@ test('installPinned: installs yohoho==version from PyPI with --force (reconciles
   b.installPinned({ version: '0.0.1', run, log: () => {} });
   // --force so a marker-detected version skew actually REPLACES the installed version
   // instead of uv reporting "already installed" and exiting non-zero (-> false GitHub hint).
-  assert.deepStrictEqual(calls, [['uv', 'tool', 'install', '--force', 'yohoho==0.0.1']]);
+  // --refresh so uv's cached index never shadows a freshly-published version.
+  assert.deepStrictEqual(calls, [['uv', 'tool', 'install', '--force', '--refresh', 'yohoho==0.0.1']]);
+});
+
+test('installPinned: failure surfaces uv\'s real stderr', () => {
+  const run = () => ({ status: 1, stderr: 'No solution found: no version of yohoho==9.9.9' });
+  assert.throws(() => b.installPinned({ version: '9.9.9', run, log: () => {} }),
+    /No solution found/);
 });
 
 test('installPinned: failure throws with the GitHub fallback command', () => {
@@ -107,7 +121,7 @@ test('bootstrapAndRun: cold path ensures uv, installs, writes marker', () => {
   const { opts, calls } = harness({ readFileSync: () => { throw new Error('ENOENT'); } });
   b.bootstrapAndRun(opts);
   assert.ok(calls.run.some((c) => c[0] === 'uv' && c[1] === '--version'));
-  assert.ok(calls.run.some((c) => c.join(' ') === 'uv tool install --force yohoho==0.0.1'));
+  assert.ok(calls.run.some((c) => c.join(' ') === 'uv tool install --force --refresh yohoho==0.0.1'));
   assert.deepStrictEqual(calls.wrote, [[b.markerPath('/Users/x'), '0.0.1']]);
 });
 
@@ -116,9 +130,9 @@ test('bootstrapAndRun: propagates the child exit code', () => {
   assert.strictEqual(b.bootstrapAndRun(opts), 7);
 });
 
-test('bootstrapAndRun: off-darwin prints the macOS-only notice but still runs', () => {
-  const { opts, calls } = harness({ platform: 'linux' });
+test('bootstrapAndRun: runs on non-darwin without a macOS-only notice', () => {
+  const { opts, calls } = harness({ platform: 'win32' });
   b.bootstrapAndRun(opts);
-  assert.ok(calls.logs.some((m) => /macOS only/i.test(m)));
+  assert.ok(!calls.logs.some((m) => /macOS only/i.test(m)), 'the stale macOS-only notice is gone');
   assert.strictEqual(calls.spawn.length, 1);
 });

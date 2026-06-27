@@ -11,25 +11,32 @@ function needsBootstrap({ markerFile, version, readFileSync }) {
   return recorded !== version;
 }
 
-function ensureUv({ run, log }) {
+function ensureUv({ run, log, platform }) {
   if (run('uv', ['--version']).status === 0) return;
   log('Installing uv (one-time)…');
-  const r = run('sh', ['-c', 'curl -LsSf https://astral.sh/uv/install.sh | sh']);
+  const isWin = (platform || process.platform) === 'win32';
+  const r = isWin
+    ? run('powershell', ['-NoProfile', '-ExecutionPolicy', 'ByPass', '-c',
+        'irm https://astral.sh/uv/install.ps1 | iex'])
+    : run('sh', ['-c', 'curl -LsSf https://astral.sh/uv/install.sh | sh']);
   if (r.status !== 0) {
-    throw new Error(
-      "Could not install 'uv'. Install it, then re-run:\n" +
-      '  curl -LsSf https://astral.sh/uv/install.sh | sh',
-    );
+    const cmd = isWin
+      ? 'powershell -ExecutionPolicy ByPass -c "irm https://astral.sh/uv/install.ps1 | iex"'
+      : 'curl -LsSf https://astral.sh/uv/install.sh | sh';
+    throw new Error("Could not install 'uv'. Install it, then re-run:\n  " + cmd);
   }
 }
 
 function installPinned({ version, run, log }) {
   log('Setting up yohoho (one-time)…');
-  const r = run('uv', ['tool', 'install', '--force', `yohoho==${version}`]);
+  // --refresh so uv's cached index can't shadow a freshly-published version.
+  const r = run('uv', ['tool', 'install', '--force', '--refresh', `yohoho==${version}`]);
   if (r.status !== 0) {
+    const detail = String(r.stderr || r.stdout || '').trim();
     throw new Error(
-      `Could not install yohoho==${version} from PyPI.\n` +
-      `Try the GitHub install instead:\n` +
+      `Could not install yohoho==${version} from PyPI.` +
+      (detail ? `\n\n${detail}` : '') +
+      `\n\nTry the GitHub install instead:\n` +
       `  uv tool install 'git+https://github.com/by-k4n/yohoho.git@v${version}'`,
     );
   }
@@ -48,7 +55,7 @@ function uvToolBin({ run, homedir }) {
 }
 
 function withBinOnPath(env, uvBin) {
-  return { ...env, PATH: env.PATH ? `${uvBin}:${env.PATH}` : uvBin };
+  return { ...env, PATH: env.PATH ? `${uvBin}${path.delimiter}${env.PATH}` : uvBin };
 }
 
 function bootstrapAndRun(opts) {
@@ -57,11 +64,9 @@ function bootstrapAndRun(opts) {
     run, spawn, readFileSync, writeFileSync, mkdirSync, env, log,
   } = opts;
 
-  if (platform !== 'darwin') log('Note: yohoho currently supports macOS only.');
-
   const markerFile = markerPath(homedir);
   if (needsBootstrap({ markerFile, version, readFileSync })) {
-    ensureUv({ run, log });
+    ensureUv({ run, log, platform });
     installPinned({ version, run, log });
     writeMarker({ markerFile, version, mkdirSync, writeFileSync });
   }

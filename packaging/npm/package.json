@@ -1,6 +1,6 @@
 {
   "name": "@by-k4n/yohoho",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "description": "Free, fully-local voice dictation — installer that bootstraps the Python tool via uv.",
   "bin": { "yohoho": "bin/yohoho.js" },
   "files": ["bin/", "lib/", "README.md"],
