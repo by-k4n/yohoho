@@ -40,7 +40,7 @@ from yohoho.core.events import Terminal
 from yohoho.core.platform_api import WindowChrome, NullWindowChrome
 
 # Panel size (single-row pill).
-_WIDTH = 280
+_WIDTH = 300
 _HEIGHT = 40
 _RADIUS = 20            # fully-rounded stadium (= height/2)
 
@@ -58,15 +58,16 @@ _ROW_PITCH = 4          # y: 32, 28, ... 8  (center row at 20)
 _GRID_X0 = 40
 _GRID_Y_BOTTOM = 32
 
-# Inline timer / percent (right).
-_RIGHT_X = 262
+# Inline timer / percent (right). Pill is 300 wide; 18px right margin leaves the
+# 55px Doto timer ("00:00") clear of the waveform (which ends at x≈213).
+_RIGHT_X = 282
 _MID_Y = 20
 
 # Usable pill width for the banner (for width-based fallback to short code).
 _BANNER_MAX_W = 248
 
 # Wordmark (close only), centered.
-_WORD_CX = 140
+_WORD_CX = 150
 _WORD_CY = 20
 
 # Dot radii.
@@ -443,8 +444,15 @@ class StatusPanel:
     def show(self) -> None:
         # Slide on-screen (no deiconify — that would activate the app). topmost is
         # re-asserted so the pill floats over the focused app.
-        self.top.geometry(self._on_geom)
+        #
+        # Order is load-bearing on Windows: `attributes("-topmost", True)` fires a
+        # synchronous SetWindowPos → WM_WINDOWPOSCHANGED that makes Tk read back the
+        # CURRENT (pre-move, off-screen) Win32 position and overwrite the pending
+        # geometry — so doing it AFTER geometry() discards the move and the panel
+        # never appears (the first-launch "no UI" bug). Assert topmost FIRST, then
+        # let geometry() be the final queued op so it propagates. Harmless on macOS.
         self.top.attributes("-topmost", True)
+        self.top.geometry(self._on_geom)
 
     def hide(self) -> None:
         # Slide off-screen rather than withdraw() (which would activate on re-show).
