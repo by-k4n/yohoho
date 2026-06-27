@@ -12,9 +12,14 @@ it looks smooth there). We get smooth corners with a TWO-WINDOW per-pixel-alpha 
     (numpy), and push the result to B with `UpdateLayeredWindow`. B mirrors A's screen rect, so the
     existing `show()`/`hide()` (which move A on/off-screen) need no changes — B follows A.
 
-All raw win32/GDI lives behind the injectable `win32` facade so unit tests never touch pywin32; the mask
-and compositing are pure numpy (already a runtime dependency). Best-effort throughout — any failure
-degrades to an (invisible) plain window and never crashes the panel."""
+Best-effort throughout — and *fail-safe*: any setup failure restores A to a VISIBLE (aliased) pill rather
+than leaving the whole status UI invisible, a blank/failed frame capture is skipped rather than shown as a
+black pill, and while the panel is parked off-screen the costly capture/composite/present is skipped so the
+loop costs ~nothing. All raw win32/GDI lives behind the injectable `win32` facade so unit tests never touch
+pywin32; the mask and compositing are pure numpy (already a runtime dependency).
+
+This is a deliberate deviation from the spec's `SetWindowRgn` decision (a hard, anti-aliasing-incapable GDI
+clip) — see docs/superpowers/specs §"Pill shape fidelity" and plan Task B7."""
 
 import ctypes
 from ctypes import wintypes
@@ -34,9 +39,13 @@ _AC_SRC_ALPHA = 0x01
 _BI_RGB = 0
 _DIB_RGB_COLORS = 0
 _SW_SHOWNOACTIVATE = 4
+_SW_HIDE = 0
+_LOGPIXELSX = 88
 
-# Compositing refresh cadence (ms) — matches the panel's ~55ms render tick (~18fps).
+# Compositing cadence (ms). Shown: ~55ms (~18fps) to match the panel's render tick. Parked off-screen:
+# a slow idle poll that only reads A's rect (cheap) until it slides back on-screen — no wasted GPU/CPU.
 _REFRESH_MS = 55
+_IDLE_REFRESH_MS = 150
 
 
 class _BITMAPINFOHEADER(ctypes.Structure):
@@ -97,6 +106,27 @@ class _RealWin32:
     """The real win32/GDI surface. Construction is cheap and touches no windll (so the macOS bundle's
     factory tests can build a Windows bundle); every method imports pywin32/ctypes lazily."""
 
+    def dpi_scale(self) -> float:
+        """System DPI ÷ 96 — the panel's geometry multiplier. The process is SYSTEM_DPI_AWARE
+        (core/ui/_dpi), so the system DPI is exactly what Tk renders the primary monitor into."""
+        u = ctypes.windll.user32
+        gdfs = getattr(u, "GetDpiForSystem", None)  # Win 10 1607+
+        if gdfs is not None:
+            gdfs.restype = wintypes.UINT
+            dpi = gdfs()
+            if dpi:
+                return dpi / 96.0
+        g = ctypes.windll.gdi32  # legacy fallback: GetDeviceCaps(GetDC(0), LOGPIXELSX)
+        u.GetDC.restype = ctypes.c_void_p
+        u.GetDC.argtypes = (ctypes.c_void_p,)
+        g.GetDeviceCaps.argtypes = (ctypes.c_void_p, ctypes.c_int)
+        u.ReleaseDC.argtypes = (ctypes.c_void_p, ctypes.c_void_p)
+        dc = u.GetDC(0)
+        try:
+            return (g.GetDeviceCaps(dc, _LOGPIXELSX) or 96) / 96.0
+        finally:
+            u.ReleaseDC(0, dc)
+
     def get_ancestor_root(self, child_hwnd: int) -> int:
         fn = ctypes.windll.user32.GetAncestor
         fn.argtypes = (wintypes.HWND, wintypes.UINT)
@@ -124,6 +154,7 @@ class _RealWin32:
         u.ShowWindow.argtypes = (vp, cint)
         u.GetDC.restype = vp
         u.GetDC.argtypes = (vp,)
+        u.PrintWindow.restype = wintypes.BOOL  # so a failed capture is detectable (RDP/secure desktop)
         u.PrintWindow.argtypes = (vp, vp, uint)
         u.UpdateLayeredWindow.argtypes = (vp, vp, vp, vp, vp, vp, dword, vp, dword)
         g.CreateCompatibleDC.restype = vp
@@ -143,7 +174,7 @@ class _RealWin32:
         self._wh = (w, h)
         self._cap_mem = g.CreateCompatibleDC(scr)
         self._cap_bmp = g.CreateCompatibleBitmap(scr, w, h)
-        g.SelectObject(self._cap_mem, self._cap_bmp)
+        self._cap_old = g.SelectObject(self._cap_mem, self._cap_bmp)
         self._cap_buf = (ctypes.c_ubyte * (w * h * 4))()
         self._cap_bmi = _bmi_topdown(w, h)
         self._push_screen = scr
@@ -151,17 +182,25 @@ class _RealWin32:
         self._ppv = ctypes.c_void_p()
         self._push_dib = g.CreateDIBSection(scr, ctypes.byref(_bmi_topdown(w, h)),
                                             _DIB_RGB_COLORS, ctypes.byref(self._ppv), None, 0)
-        g.SelectObject(self._push_mem, self._push_dib)
+        self._push_old = g.SelectObject(self._push_mem, self._push_dib)
+        self._torn = False
         return b
 
     def capture_bgra(self, a_hwnd: int):
-        """Read window A's full content (even off-screen / -alpha 0) via PrintWindow → (h, w, 4) BGRA."""
+        """Read window A's full content (even off-screen / -alpha 0) via PrintWindow → (h, w, 4) BGRA,
+        or None if PrintWindow reported failure (some GPU/RDP/secure-desktop setups return blank)."""
         import numpy as np
         w, h = self._wh
-        self._u.PrintWindow(a_hwnd, self._cap_mem, _PW_RENDERFULLCONTENT)
+        if not self._u.PrintWindow(a_hwnd, self._cap_mem, _PW_RENDERFULLCONTENT):
+            return None  # caller skips the present rather than show a content-less black pill
         self._g.GetDIBits(self._cap_mem, self._cap_bmp, 0, h, self._cap_buf,
                           ctypes.byref(self._cap_bmi), _DIB_RGB_COLORS)
         return np.frombuffer(self._cap_buf, np.uint8).reshape(h, w, 4)
+
+    def show_window(self, hwnd: int, visible: bool) -> None:
+        """Show/hide B without activating it. (Gating the loop only skips the present, so B must be
+        explicitly hidden when the panel parks off-screen — else it freezes on-screen mid-frame.)"""
+        self._u.ShowWindow(hwnd, _SW_SHOWNOACTIVATE if visible else _SW_HIDE)
 
     def update_layered(self, b_hwnd: int, x: int, y: int, premul) -> None:
         """Push premultiplied top-down BGRA onto B at screen (x, y) with UpdateLayeredWindow."""
@@ -174,14 +213,51 @@ class _RealWin32:
         self._u.UpdateLayeredWindow(b_hwnd, self._push_screen, ctypes.byref(pd), ctypes.byref(sz),
                                     self._push_mem, ctypes.byref(ps), 0, ctypes.byref(bl), _ULW_ALPHA)
 
+    def teardown(self) -> None:
+        """Free the one-time DCs/bitmaps + the shared screen DC. Idempotent; bound to A's <Destroy>.
+        (B itself is auto-freed by the OS as A's owned window.)"""
+        if getattr(self, "_torn", True):
+            return  # never created, or already torn down
+        self._torn = True
+        u, g = self._u, self._g
+        u.ReleaseDC.argtypes = (ctypes.c_void_p, ctypes.c_void_p)
+        g.DeleteDC.argtypes = (ctypes.c_void_p,)
+        g.DeleteObject.argtypes = (ctypes.c_void_p,)
+        for mem, old, obj in ((self._cap_mem, self._cap_old, self._cap_bmp),
+                              (self._push_mem, self._push_old, self._push_dib)):
+            try:
+                g.SelectObject(mem, old)   # restore the original object before deleting ours
+                g.DeleteObject(obj)
+                g.DeleteDC(mem)
+            except Exception:  # noqa: BLE001 — teardown is best-effort
+                pass
+        try:
+            u.ReleaseDC(0, self._push_screen)
+        except Exception:  # noqa: BLE001
+            pass
+
 
 class WindowsWindowChrome:
+    # The Windows pill is wider than macOS: Doto's "00:00" renders wider on GDI, so 300px (vs 280)
+    # keeps the right-anchored timer clear of the waveform. Sourced into the panel via the seam so it
+    # can never affect macOS. `panel_scale` multiplies all panel geometry by the monitor DPI factor.
+    preferred_panel_width: int = 300
+
     def __init__(self, *, win32=None, alpha: float = 0.96) -> None:
         self._w = win32 or _RealWin32()
         self._alpha = alpha
         self._a_hwnd = None
         self._b_hwnd = None
         self._mask = None
+        self._b_shown = False  # tracks B's on-screen visibility so park/unpark toggles it exactly once
+
+    @property
+    def panel_scale(self) -> float:
+        try:
+            s = float(self._w.dpi_scale())
+        except Exception:  # noqa: BLE001 — never break the panel on a DPI probe (e.g. off-Windows)
+            return 1.0
+        return s if 1.0 <= s <= 4.0 else 1.0  # ignore absurd/degenerate values
 
     def set_app_policy(self) -> None:
         pass  # DPI awareness is handled in core/ui/_dpi before tk.Tk(); nothing process-level here.
@@ -203,25 +279,63 @@ class WindowsWindowChrome:
             w, h = canvas.winfo_reqwidth(), canvas.winfo_reqheight()
             self._mask = _capsule_mask(w, h)  # cached once (depends only on size)
             self._b_hwnd = self._w.create_display_window(self._a_hwnd, w, h)  # owned by A → auto-freed
+            self._b_shown = True  # created with SW_SHOWNOACTIVATE (invisible until the first present)
+            try:
+                toplevel.bind("<Destroy>", lambda e: self._on_destroy(e, toplevel))  # free GDI on close
+            except Exception:  # noqa: BLE001 — teardown binding is best-effort
+                pass
             toplevel.after(0, self._refresh, toplevel)  # drive AA compositing on the Tk main thread
-        except Exception:  # noqa: BLE001 — degrade to the plain (invisible) window set above
-            pass
+        except Exception:  # noqa: BLE001
+            # Fail SAFE: restore A to a VISIBLE (aliased) pill rather than leaving the whole status
+            # UI invisible at -alpha 0. Best-effort rule: a jagged pill beats no pill.
+            try:
+                toplevel.attributes("-alpha", self._alpha)
+            except Exception:  # noqa: BLE001
+                pass
+
+    def _on_destroy(self, event, toplevel) -> None:
+        # <Destroy> bubbles up from child widgets too; only tear down on the Toplevel's own destroy.
+        if getattr(event, "widget", None) is toplevel:
+            try:
+                self._w.teardown()
+            except Exception:  # noqa: BLE001
+                pass
 
     def _refresh(self, toplevel) -> None:
-        """One compositing frame: capture A → AA-mask + translucency → present on B at A's rect; reschedule."""
+        """One compositing frame: capture A → AA-mask + translucency → present on B at A's rect; reschedule.
+        While A is parked off-screen the costly capture/composite/present is skipped (idle poll only)."""
         try:
             if not toplevel.winfo_exists():
                 return  # window destroyed — stop the loop (B is auto-freed as A's owned window)
         except Exception:  # noqa: BLE001
             return
+        delay = _REFRESH_MS
         if self._a_hwnd is not None and self._b_hwnd is not None:
             try:
                 left, top, _r, _b = self._w.get_window_rect(self._a_hwnd)
-                out = _compose_premul(self._w.capture_bgra(self._a_hwnd), self._mask, self._alpha)
-                self._w.update_layered(self._b_hwnd, left, top, out)
+                if self._is_parked(toplevel, left, top):
+                    delay = _IDLE_REFRESH_MS  # hidden: don't run the ~18fps capture/composite loop
+                    if self._b_shown:
+                        self._w.show_window(self._b_hwnd, False)  # park B too, or it freezes on-screen
+                        self._b_shown = False
+                else:
+                    cap = self._w.capture_bgra(self._a_hwnd)
+                    if cap is not None and cap.any():  # skip blank/failed captures — no black pill
+                        out = _compose_premul(cap, self._mask, self._alpha)
+                        self._w.update_layered(self._b_hwnd, left, top, out)  # position+content first…
+                        if not self._b_shown:
+                            self._w.show_window(self._b_hwnd, True)  # …then reveal it already-correct
+                            self._b_shown = True
             except Exception:  # noqa: BLE001 — never let one bad frame crash the panel
                 pass
         try:
-            toplevel.after(_REFRESH_MS, self._refresh, toplevel)
+            toplevel.after(delay, self._refresh, toplevel)
         except Exception:  # noqa: BLE001
             pass
+
+    def _is_parked(self, toplevel, left: int, top: int) -> bool:
+        """True when A sits past the screen edge — show()/hide() park it at (sw+2000, sh+2000)."""
+        try:
+            return left >= toplevel.winfo_screenwidth() or top >= toplevel.winfo_screenheight()
+        except Exception:  # noqa: BLE001
+            return False

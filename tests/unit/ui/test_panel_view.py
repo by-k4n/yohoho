@@ -19,8 +19,9 @@ def test_panel_builds_and_renders():
     model = PanelModel(rows=7)
     panel = StatusPanel(root, model)
 
-    # Task 7: new single-row geometry; wordmark hidden from the start.
-    assert panel.width == 280 and panel.height == 40
+    # Width is seam-sourced, not a magic constant: the default/null chrome is the macOS pill.
+    from yohoho.core.platform_api import NullWindowChrome
+    assert panel.width == NullWindowChrome().preferred_panel_width and panel.height == 40
     assert panel.canvas.itemcget(panel.word_id, "state") == "hidden"  # no opening bookend
 
     # Task 8: wordmark stays hidden throughout recording and transcribing.
@@ -254,4 +255,101 @@ def test_timer_and_percent_mutually_exclusive():
     assert panel.canvas.itemcget(panel.timer_id, "state") == "hidden"   # timer hidden when % shown
     assert panel.canvas.itemcget(panel.pct_id, "state") == "normal"     # percent shown while transcribing
 
+    root.destroy()
+
+
+# --------------------------------------------------------------------------
+# Layout invariants — hold at any per-OS width / DPI scale (no magic numbers).
+# --------------------------------------------------------------------------
+
+@pytest.mark.parametrize("width", [280, 300])
+def test_layout_bounds_and_centering_hold_at_any_width(width):
+    """Structural geometry stays within the canvas and the wordmark/banner stay centered,
+    at both the macOS (280) and Windows (300) widths."""
+    import tkinter
+    import yohoho.core.ui  # noqa: F401
+    from yohoho.core.ui.panel import StatusPanel
+    from yohoho.core.ui.panel_model import PanelModel
+    try:
+        root = tkinter.Tk()
+    except tkinter.TclError as e:
+        pytest.skip(f"no Tk/display: {e}")
+    root.withdraw()
+    p = StatusPanel(root, PanelModel(rows=7), width=width, scale=1.0)
+    pw, ph = p._pw, p._ph
+    assert (pw, ph) == (width, 40)
+    # Nothing structural escapes the pill bounds: waveform extent, REC dot, timer anchor.
+    assert p._col_x[0] - p._glow_r >= 0
+    assert p._col_x[-1] + p._glow_r <= pw
+    assert 0 <= p._right_x <= pw
+    # Wordmark + banner are centered on the pill at any width.
+    assert p._cx == pw / 2
+    assert p.canvas.coords(p.word_id)[0] == pw / 2
+    assert p.canvas.coords(p.banner_id)[0] == pw / 2
+    root.destroy()
+
+
+def test_timer_never_overlaps_waveform_at_this_platforms_width():
+    """The real per-OS bug: the right-anchored timer must clear the waveform at THIS platform's
+    own width + font. Sources width AND scale from the real chrome so coords and the auto-scaled
+    font stay consistent (Windows 300 @ system-DPI; macOS 280 @ 1.0)."""
+    import tkinter
+    import yohoho.core.ui  # noqa: F401
+    from yohoho.core.events import State
+    from yohoho.core.platform_factory import get_platform
+    from yohoho.core.ui.panel import StatusPanel
+    from yohoho.core.ui.panel_model import PanelModel
+    try:
+        root = tkinter.Tk()
+    except tkinter.TclError as e:
+        pytest.skip(f"no Tk/display: {e}")
+    root.withdraw()
+    chrome = get_platform().window_chrome
+    p = StatusPanel(root, PanelModel(rows=7),
+                    width=chrome.preferred_panel_width, scale=chrome.panel_scale)
+    p.model.set_state(State.RECORDING)
+    p.model.tick()
+    p.render()
+    timer_left = p.canvas.bbox(p.timer_id)[0]            # real rendered text bbox
+    waveform_right = p._col_x[-1] + p._glow_r
+    assert timer_left >= waveform_right, (timer_left, waveform_right,
+                                          chrome.preferred_panel_width, chrome.panel_scale)
+    root.destroy()
+
+
+def test_scale_one_reproduces_pre_m5_macos_geometry():
+    """macOS no-op guarantee: width 280 + scale 1.0 == the pre-M5 pixel layout exactly."""
+    import tkinter
+    import yohoho.core.ui  # noqa: F401
+    from yohoho.core.ui.panel import StatusPanel
+    from yohoho.core.ui.panel_model import PanelModel
+    try:
+        root = tkinter.Tk()
+    except tkinter.TclError as e:
+        pytest.skip(f"no Tk/display: {e}")
+    root.withdraw()
+    p = StatusPanel(root, PanelModel(rows=7), width=280, scale=1.0)
+    assert (p._pw, p._ph) == (280, 40)
+    assert p._col_x[0] == 40 and p._col_x[-1] == 212        # waveform origin/extent unchanged
+    assert p._right_x == 262 and p._cx == 140               # timer anchor + center unchanged
+    assert p._mid_y == 20 and p._banner_max_w == 248
+    assert (p._lit_r, p._glow_r) == (1.0, 1.5)
+    root.destroy()
+
+
+def test_geometry_scales_with_dpi_factor():
+    """At scale 2.0 every coordinate doubles (font-independent geometry)."""
+    import tkinter
+    import yohoho.core.ui  # noqa: F401
+    from yohoho.core.ui.panel import StatusPanel
+    from yohoho.core.ui.panel_model import PanelModel
+    try:
+        root = tkinter.Tk()
+    except tkinter.TclError as e:
+        pytest.skip(f"no Tk/display: {e}")
+    root.withdraw()
+    p = StatusPanel(root, PanelModel(rows=7), width=300, scale=2.0)
+    assert (p._pw, p._ph) == (600, 80)
+    assert p._col_x[0] == 80 and p._right_x == (300 - 18) * 2
+    assert p._mid_y == 40 and p._glow_r == 3.0
     root.destroy()

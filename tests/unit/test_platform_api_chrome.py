@@ -20,6 +20,13 @@ def test_window_chrome_protocol_is_runtime_checkable():
     assert isinstance(nc, pa.WindowChrome)
 
 
+def test_null_chrome_exposes_macos_default_sizing():
+    # The seam's per-OS sizing; the null/default is the macOS-tuned pill, safe for every OS.
+    nc = pa.NullWindowChrome()
+    assert nc.preferred_panel_width == 280
+    assert nc.panel_scale == 1.0
+
+
 def test_null_chrome_set_app_policy_is_noop():
     pa.NullWindowChrome().set_app_policy()  # must not raise
 

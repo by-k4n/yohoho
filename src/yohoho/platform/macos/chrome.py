@@ -5,6 +5,11 @@ from yohoho.platform import macos_window
 
 
 class MacWindowChrome:
+    # macOS keeps the pre-M5 pill exactly: 280px logical, no DPI multiply (Quartz-backed
+    # Tk renders in points, so the OS already handles Retina backing scale).
+    preferred_panel_width: int = 280
+    panel_scale: float = 1.0
+
     def __init__(
         self,
         *,
