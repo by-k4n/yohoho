@@ -3,7 +3,7 @@
 Dispatches subcommands:
   dictate    — record N seconds, transcribe on-device, print transcript (M1 dev command)
   panel-demo — drive the status panel through all states with synthetic data (M2)
-  config     — get/set config values
+  config     — get/set/list/reset config values
   doctor     — show permission status
   setup      — first-run: hotkey + permissions + model download + autostart
   start      — run the hotkey dictation loop (foreground)
@@ -317,59 +317,88 @@ def run_panel_demo(cycle: bool, state: Optional[str], seconds: int) -> None:
 # config command (Task 11)
 # ---------------------------------------------------------------------------
 
-# Top-level scalar keys that can be set via `yohoho config <key> <value>`.
-# Dict sub-keys (audio, clipboard, …) are intentionally excluded for now —
-# set the nested keys via direct YAML editing.
-_CONFIG_TOP_LEVEL_KEYS = {
-    "hotkey", "model", "device", "compute_type", "language", "cancel_channel",
-    "recording_mode", "input_method", "log_level",
-}
+def _fmt_value(v) -> str:
+    if v is None:
+        return "(default)"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return str(v)
+
+
+def _print_settings_table(rows) -> None:
+    headers = ("SETTING", "CURRENT", "DEFAULT", "DESCRIPTION")
+    table = [headers] + [(k, _fmt_value(c), _fmt_value(d), desc) for k, c, d, desc in rows]
+    widths = [max(len(r[i]) for r in table) for i in range(3)]
+    for row in table:
+        print(f"{row[0]:<{widths[0]}}  {row[1]:<{widths[1]}}  {row[2]:<{widths[2]}}  {row[3]}")
 
 
 def run_config(args, data_dir: Path) -> None:
-    """Get or set a top-level config value.
+    """Get/set/reset/list config values.
 
-    ``yohoho config``              — print the full config as YAML
-    ``yohoho config <key> <val>``  — set *key* to *val* (validated, saved)
+    ``yohoho config``                  print full config as YAML
+    ``yohoho config list``             table of every setting + default + description
+    ``yohoho config <key>``            get one value
+    ``yohoho config <key> <value>``    set + validate + save
+    ``yohoho config reset <key|all>``  restore a key (or everything) to default
     """
+    from yohoho.core import config_access as ca
+    from yohoho.core.config import ConfigError
+
     cfg_path = data_dir / "config.yaml"
     cfg = load_config(cfg_path)
-
     key = getattr(args, "config_key", None)
     value = getattr(args, "config_value", None)
 
     if key is None:
-        # Print the current config as YAML
         import yaml
         print(yaml.safe_dump(_config_as_dict(cfg), sort_keys=False, allow_unicode=True), end="")
         return
 
-    if key not in _CONFIG_TOP_LEVEL_KEYS:
-        print(f"yohoho config: unknown key {key!r}. "
-              f"Valid keys: {sorted(_CONFIG_TOP_LEVEL_KEYS)}", file=sys.stderr)
+    # 'list' and 'reset' are reserved subcommand tokens: no settable leaf may be named either.
+    if key == "list":
+        _print_settings_table(ca.list_settings(cfg))
         return
 
-    # Apply the value — rebuild the config dict, update the key, reload as Config
-    import yaml
-    d = _config_as_dict(cfg)
-    # All settable top-level keys are strings; _validate catches illegal values.
-    d[key] = value
-
-    # Re-validate by round-tripping through load_config's path
-    tmp_yaml = yaml.safe_dump(d, sort_keys=False, allow_unicode=True)
-    # Load to validate
-    from yohoho.core.config import _validate, _migrate
-    merged = yaml.safe_load(tmp_yaml)
-    _migrate(merged)
-    try:
-        _validate(merged)
-    except Exception as exc:
-        print(f"yohoho config: invalid value — {exc}", file=sys.stderr)
+    if key == "reset":
+        if value is None:
+            print("yohoho config: specify a key to reset, or 'all'", file=sys.stderr)
+            return
+        try:
+            if value == "all":
+                if not getattr(args, "yes", False):
+                    try:
+                        resp = input("Reset ALL settings to defaults? [y/N] ").strip().lower()
+                    except (EOFError, KeyboardInterrupt):
+                        resp = ""
+                    if resp not in ("y", "yes"):
+                        print("aborted.")
+                        return
+                save_config(ca.reset_all(cfg), cfg_path)
+                print("all settings reset to defaults.")
+                return
+            old = ca.get_value(cfg, value)
+            new_cfg = ca.reset_value(cfg, value)
+            save_config(new_cfg, cfg_path)
+            print(f"{value}: {_fmt_value(old)} → {_fmt_value(ca.get_value(new_cfg, value))}  (default restored)")
+        except (ca.SettingError, ConfigError) as exc:
+            print(f"yohoho config: {exc}", file=sys.stderr)
         return
 
-    new_cfg = type(cfg)(**merged)
-    save_config(new_cfg, cfg_path)
-    print(f"yohoho config: set {key} = {value!r}")
+    if value is None:  # get one
+        try:
+            print(_fmt_value(ca.get_value(cfg, key)))
+        except ca.SettingError as exc:
+            print(f"yohoho config: {exc}", file=sys.stderr)
+        return
+
+    try:  # set
+        old = ca.get_value(cfg, key)
+        new_cfg = ca.set_value(cfg, key, value)
+        save_config(new_cfg, cfg_path)
+        print(f"{key}: {_fmt_value(old)} → {_fmt_value(ca.get_value(new_cfg, key))}  (saved)")
+    except (ca.SettingError, ConfigError) as exc:
+        print(f"yohoho config: {exc}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -620,18 +649,23 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # -- config ---------------------------------------------------------------
-    config_p = subparsers.add_parser("config", help="Get or set a config value")
+    config_p = subparsers.add_parser("config", help="Get, set, list, or reset config values")
     config_p.add_argument(
         "config_key",
         nargs="?",
         default=None,
-        help="Config key to get/set (e.g. 'hotkey')",
+        help="Config key, or 'list' / 'reset' (e.g. 'sounds.volume')",
     )
     config_p.add_argument(
         "config_value",
         nargs="?",
         default=None,
         help="New value to set (omit to print current value)",
+    )
+    config_p.add_argument(
+        "--yes",
+        action="store_true",
+        help="Skip the confirmation prompt for 'config reset all'",
     )
 
     # -- doctor ---------------------------------------------------------------

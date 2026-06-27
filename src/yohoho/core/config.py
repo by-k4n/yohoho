@@ -85,6 +85,31 @@ def default_config() -> Config:
     return Config()
 
 
+# Human-readable one-line descriptions for `yohoho config list`. Co-located with the schema:
+# adding a setting means adding its field/default AND a line here (enforced by a coverage test).
+SETTING_DESCRIPTIONS = {
+    "hotkey": "Activation chord (e.g. ctrl+alt+space)",
+    "model": "Speech-to-text model name",
+    "device": "Compute device (cpu)",
+    "compute_type": "Model quantization (int8)",
+    "language": "Input language code",
+    "cancel_channel": "Key that cancels an in-progress dictation",
+    "recording_mode": "press_to_toggle or voice_activity_detection",
+    "input_method": "How transcribed text is delivered",
+    "log_level": "Logging verbosity (debug/info/…)",
+    "clipboard.restore_previous": "Restore the clipboard after pasting",
+    "clipboard.restore_delay_ms": "Delay before restoring the clipboard (ms)",
+    "history.enabled": "Keep a local transcript history",
+    "history.capture_app_id": "Record the active app in history",
+    "history.max_entries": "Max history entries to keep",
+    "history.max_age_days": "Days to retain history",
+    "audio.device_index": "Microphone device index (blank/default = system default)",
+    "ui.show_panel": "Show the dot-matrix status panel during dictation",
+    "sounds.enabled": "Play the on/off chimes",
+    "sounds.volume": "Chime volume (0.0–1.0)",
+}
+
+
 # ---------------------------------------------------------------------------
 # Data-dir resolution
 # ---------------------------------------------------------------------------
@@ -171,6 +196,12 @@ def _validate(d: dict) -> None:
     history = d.get("history", {})
     if history.get("max_entries", 1) <= 0:
         raise ConfigError("'history.max_entries' must be > 0.")
+    if history.get("max_age_days", 0) < 0:
+        raise ConfigError("'history.max_age_days' must be >= 0.")
+    audio = d.get("audio", {})
+    dev = audio.get("device_index", None)
+    if dev is not None and (not isinstance(dev, int) or isinstance(dev, bool) or dev < 0):
+        raise ConfigError("'audio.device_index' must be a non-negative integer or null.")
     sounds = d.get("sounds", {})
     if not isinstance(sounds.get("enabled", True), bool):
         raise ConfigError("'sounds.enabled' must be true or false.")

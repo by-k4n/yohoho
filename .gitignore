@@ -51,3 +51,6 @@ hf/
 /docs/m4-followups.md
 /docs/HANDOFF.md
 /docs/README.md
+
+# Skills marketplace lockfile (harness artifact, not project content)
+skills-lock.json
