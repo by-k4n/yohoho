@@ -23,13 +23,17 @@ are next.
 
 ## Install & set up (macOS)
 
-Install with whichever you have:
+Install with whichever you have — each puts a `yohoho` command on your PATH:
 
 ```bash
 npm i -g @by-k4n/yohoho    # Node users — bootstraps Python via uv under the hood
 uv tool install yohoho     # uv users
 pipx install yohoho        # pipx users
 ```
+
+The **npm** install adds `yohoho` to your PATH automatically (it lands in npm's global bin) — open a
+new shell and you're set, no Python needed. With **uv** or **pipx**, if `yohoho` isn't found afterward,
+run `uv tool ensurepath` (or `pipx ensurepath`) once to add their bin directory, then restart your shell.
 
 Bleeding edge / no PyPI: `uv tool install 'git+https://github.com/by-k4n/yohoho.git@vX.Y.Z'`.
 
@@ -38,6 +42,7 @@ Then:
 ```bash
 yohoho setup     # pick a hotkey, grant permissions, download the model (~660 MB, first run)
 yohoho start     # press your hotkey anywhere to dictate
+yohoho config    # interactive settings menu — record a new hotkey, tweak chimes, and more
 ```
 
 `setup` walks you through it, opens the right System Settings panes, and installs a launch-on-login
