@@ -10,6 +10,7 @@ from yohoho.platform.windows.focus import WindowsFocusProbe
 from yohoho.platform.windows.autostart import WindowsAutostart
 from yohoho.platform.windows.permissions import WindowsPermissions
 from yohoho.platform.windows.chrome import WindowsWindowChrome
+from yohoho.platform._shared.hotkey_capture import PynputHotkeyCapturer
 
 
 def _pythonw_path() -> str:
@@ -27,4 +28,5 @@ def make_windows_platform() -> PlatformBundle:
         autostart=WindowsAutostart(program_args=[_pythonw_path(), "-m", "yohoho", "start"]),
         permissions=WindowsPermissions(),
         window_chrome=WindowsWindowChrome(),
+        hotkey_capturer=PynputHotkeyCapturer(),
     )

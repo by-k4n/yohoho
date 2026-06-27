@@ -12,12 +12,22 @@ _MAC_GLYPHS = {
     "shift": "⇧",
 }
 
+_GENERIC_MODS = {"ctrl", "alt", "shift", "cmd"}
+
+
+def _split_side(p: str):
+    """('rcmd') -> ('R', 'cmd'); ('space') -> ('', 'space')."""
+    if len(p) > 1 and p[0] in ("l", "r") and p[1:] in _GENERIC_MODS:
+        return p[0].upper(), p[1:]
+    return "", p
+
 
 def format_hotkey(spec: str) -> str:
     """Render a normalized hotkey spec for humans.
 
     On macOS uses the ⌃⌥⇧⌘ glyphs ('ctrl+alt+space' -> '⌃⌥Space'); elsewhere a
-    readable '+'-joined form ('Ctrl+Alt+Space').
+    readable '+'-joined form ('Ctrl+Alt+Space'). Side-specific modifiers carry an
+    L/R prefix ('rcmd+space' -> 'R⌘Space' / 'RCmd+Space').
     """
     parts = [p for p in spec.split("+") if p]
 
@@ -25,8 +35,16 @@ def format_hotkey(spec: str) -> str:
         return "Space" if p == "space" else (p.upper() if len(p) == 1 else p.capitalize())
 
     if sys.platform == "darwin":
-        return "".join(_MAC_GLYPHS.get(p, _key(p)) for p in (p.lower() for p in parts))
-    return "+".join(_key(p.lower()) for p in parts)
+        out = []
+        for p in (p.lower() for p in parts):
+            side, base = _split_side(p)
+            out.append(side + _MAC_GLYPHS.get(base, _key(base)))
+        return "".join(out)
+    out = []
+    for p in (p.lower() for p in parts):
+        side, base = _split_side(p)
+        out.append(side + _key(base))
+    return "+".join(out)
 
 
 def handle_activation(controller, recorder, put, chimes=None) -> None:

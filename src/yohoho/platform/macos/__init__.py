@@ -10,6 +10,7 @@ from yohoho.platform.macos.focus import MacFocusProbe
 from yohoho.platform.macos.autostart import MacAutostart
 from yohoho.platform.macos.permissions import MacPermissions
 from yohoho.platform.macos.chrome import MacWindowChrome
+from yohoho.platform._shared.hotkey_capture import PynputHotkeyCapturer
 
 
 def make_macos_platform() -> PlatformBundle:
@@ -34,4 +35,5 @@ def make_macos_platform() -> PlatformBundle:
         ),
         permissions=MacPermissions(recorded_path_fn=_recorded_python_path),
         window_chrome=MacWindowChrome(),
+        hotkey_capturer=PynputHotkeyCapturer(),
     )

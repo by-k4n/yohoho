@@ -118,6 +118,20 @@ class NullWindowChrome:
             pass
 
 
+@runtime_checkable
+class HotkeyCapturer(Protocol):
+    def capture(
+        self, seconds: float = 3.0, on_progress: Optional[Callable[[float], None]] = None
+    ) -> Optional[str]: ...
+
+
+class NullHotkeyCapturer:
+    """Default capturer: capture unavailable (headless / no listener). Callers fall back to typed entry."""
+
+    def capture(self, seconds: float = 3.0, on_progress=None) -> Optional[str]:
+        return None
+
+
 @dataclass(frozen=True)
 class PlatformBundle:
     name: str
@@ -128,3 +142,4 @@ class PlatformBundle:
     autostart: AutostartManager
     permissions: PermissionsManager
     window_chrome: WindowChrome = field(default_factory=NullWindowChrome)
+    hotkey_capturer: HotkeyCapturer = field(default_factory=NullHotkeyCapturer)

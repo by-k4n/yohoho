@@ -103,3 +103,20 @@ def test_bare_reset_errors(tmp_path, capsys):
 def test_top_level_set_still_works(tmp_path):  # backward compat
     run_config(_args("hotkey", "cmd+shift+d"), tmp_path)
     assert load_config(tmp_path / "config.yaml").hotkey == "cmd+shift+d"
+
+
+def test_bare_config_non_tty_prints_yaml(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    run_config(_args(None), tmp_path)
+    assert "hotkey:" in capsys.readouterr().out            # YAML path unchanged
+
+
+def test_bare_config_tty_launches_menu(tmp_path, monkeypatch):
+    launched = {}
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setenv("TERM", "xterm-256color")
+    monkeypatch.setattr("yohoho.core.config_tui.run_menu",
+                        lambda data_dir: launched.setdefault("ok", True))
+    run_config(_args(None), tmp_path)
+    assert launched.get("ok")

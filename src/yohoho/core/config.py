@@ -179,6 +179,11 @@ def _migrate(d: dict) -> dict:
 # ---------------------------------------------------------------------------
 
 _VALID_RECORDING_MODES = {"press_to_toggle", "voice_activity_detection"}
+# Canonical option lists for the interactive editor's enum pickers. These are intentionally NOT
+# enforced by _validate — log_level / input_method stay permissive (typos via `config set` are an
+# accepted, pre-existing behavior); these constants only remove duplicated pick-lists / drift risk.
+_VALID_LOG_LEVELS = ("debug", "info", "warning", "error", "critical")
+_VALID_INPUT_METHODS = ("clipboard",)
 
 
 def _validate(d: dict) -> None:

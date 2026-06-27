@@ -1,5 +1,11 @@
 import pytest
-from yohoho.platform._shared.chords import ChordMatcher, parse_spec, normalize_id
+from yohoho.platform._shared.chords import (
+    ChordMatcher,
+    parse_spec,
+    normalize_id,
+    raw_to_token,
+    holds_to_spec,
+)
 
 
 def test_parse_spec_to_required_ids():
@@ -60,3 +66,57 @@ def test_left_right_modifier_satisfies_chord():
 def test_empty_spec_rejected():
     with pytest.raises(ValueError):
         ChordMatcher("", on_activate=lambda: None)
+
+
+def test_raw_to_token_side_specific():
+    assert raw_to_token("cmd_r") == "rcmd"
+    assert raw_to_token("alt_gr") == "ralt"
+    assert raw_to_token("ctrl_l") == "lctrl"
+    assert raw_to_token("space") == "space"        # literal passes through
+    assert raw_to_token("cmd") == "cmd"            # side-less -> generic
+
+
+def test_holds_to_spec_orders_modifiers_first():
+    assert holds_to_spec({"ctrl_l", "space"}) == "lctrl+space"
+    assert holds_to_spec({"space", "alt_r", "cmd_r"}) == "ralt+rcmd+space"
+
+
+def test_side_specific_token_matches_only_its_side():
+    fired = []
+    m = ChordMatcher("rcmd+space", on_activate=lambda: fired.append(1))
+    m.press("cmd_l")
+    m.press("space")
+    assert fired == []                 # left cmd must NOT satisfy 'rcmd'
+    m.press("cmd_r")
+    assert fired == [1]                # right cmd does
+
+
+def test_generic_token_still_matches_either_side():
+    fired = []
+    m = ChordMatcher("cmd+space", on_activate=lambda: fired.append(1))
+    m.press("cmd_r")
+    m.press("space")
+    assert fired == [1]                # generic 'cmd' accepts right cmd
+
+
+def test_generic_alt_accepts_altgr():
+    fired = []
+    m = ChordMatcher("alt+space", on_activate=lambda: fired.append(1))
+    m.press("alt_gr")
+    m.press("space")
+    assert fired == [1]
+
+
+def test_side_specific_release_one_side_rearms_correctly():
+    fired = []
+    m = ChordMatcher("rcmd+space", on_activate=lambda: fired.append(1))
+    m.press("cmd_l")
+    m.press("cmd_r")
+    m.press("space")
+    assert fired == [1]
+    m.release("cmd_l")                 # left up; right cmd + space still held
+    m.press("cmd_l")
+    assert fired == [1]                # stayed satisfied -> no re-fire
+    m.release("cmd_r")                 # now 'rcmd' unsatisfied -> re-arm
+    m.press("cmd_r")
+    assert fired == [1, 1]

@@ -141,6 +141,15 @@ def reset_all(cfg: Config) -> Config:
     return Config(**d)
 
 
+def format_value(v) -> str:
+    """Human-readable rendering of a setting value (None -> default, bools lowercased)."""
+    if v is None:
+        return "(default)"
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    return str(v)
+
+
 def list_settings(cfg: Config) -> list[tuple[str, Any, Any, str]]:
     """Return (key, current, default, description) for every settable key."""
     cur = _config_as_dict(cfg)

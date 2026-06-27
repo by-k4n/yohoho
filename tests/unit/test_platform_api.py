@@ -20,3 +20,9 @@ def test_null_injector_records_pastes(capsys):
     b.clipboard.set_text("hello world")
     assert b.injector.paste() is True
     assert "hello world" in capsys.readouterr().out
+
+
+def test_bundle_defaults_hotkey_capturer_to_null():
+    # a bundle built without a capturer gets the null one (returns None)
+    b = make_null_platform()
+    assert b.hotkey_capturer.capture(seconds=0.1) is None

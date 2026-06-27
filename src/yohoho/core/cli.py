@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -318,11 +319,8 @@ def run_panel_demo(cycle: bool, state: Optional[str], seconds: int) -> None:
 # ---------------------------------------------------------------------------
 
 def _fmt_value(v) -> str:
-    if v is None:
-        return "(default)"
-    if isinstance(v, bool):
-        return "true" if v else "false"
-    return str(v)
+    from yohoho.core.config_access import format_value
+    return format_value(v)
 
 
 def _print_settings_table(rows) -> None:
@@ -351,6 +349,10 @@ def run_config(args, data_dir: Path) -> None:
     value = getattr(args, "config_value", None)
 
     if key is None:
+        if sys.stdin.isatty() and sys.stdout.isatty() and os.environ.get("TERM") != "dumb":
+            from yohoho.core.config_tui import run_menu
+            run_menu(data_dir)
+            return
         import yaml
         print(yaml.safe_dump(_config_as_dict(cfg), sort_keys=False, allow_unicode=True), end="")
         return
