@@ -9,6 +9,7 @@ from yohoho.platform.macos.inject import MacTextInjector
 from yohoho.platform.macos.focus import MacFocusProbe
 from yohoho.platform.macos.autostart import MacAutostart
 from yohoho.platform.macos.permissions import MacPermissions
+from yohoho.platform.macos.chrome import MacWindowChrome
 
 
 def make_macos_platform() -> PlatformBundle:
@@ -32,4 +33,5 @@ def make_macos_platform() -> PlatformBundle:
             program_args=[sys.executable, "-m", "yohoho", "start"], log_dir=_dd
         ),
         permissions=MacPermissions(recorded_path_fn=_recorded_python_path),
+        window_chrome=MacWindowChrome(),
     )

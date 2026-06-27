@@ -11,4 +11,7 @@ def get_platform() -> PlatformBundle:
     if sys.platform == "darwin":
         from yohoho.platform.macos import make_macos_platform
         return make_macos_platform()
+    if sys.platform == "win32":
+        from yohoho.platform.windows import make_windows_platform
+        return make_windows_platform()
     return make_null_platform()

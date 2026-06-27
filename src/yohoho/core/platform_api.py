@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Protocol, runtime_checkable, Callable, Literal, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 # Normalized OS-agnostic hotkey, stored in config: lowercase, '+'-joined, modifiers first.
 HotkeySpec = str  # e.g. 'ctrl+alt+space', 'f14'
@@ -83,6 +83,41 @@ class PermissionsManager(Protocol):
     def guide(self) -> str: ...
 
 
+@runtime_checkable
+class WindowChrome(Protocol):
+    """Process- and window-level styling for the status panel (the only OS-specific UI seam)."""
+
+    # Per-OS panel sizing, read once at StatusPanel construction. The panel derives
+    # every position from these, so a per-OS value can never overlap, clip, or break
+    # another OS. `preferred_panel_width` is logical px (mac/null 280; win 300 — Doto's
+    # timer is wider on Windows GDI). `panel_scale` is the DPI multiplier applied to all
+    # geometry (mac/null 1.0 — Tk already renders in points; win = system DPI / 96).
+    preferred_panel_width: int
+    panel_scale: float
+
+    def set_app_policy(self) -> None: ...  # process-level (mac: accessory; win/null: no-op)
+
+    def style_window(self, root, toplevel, canvas) -> None: ...  # borderless/topmost/non-activating/round
+
+
+class NullWindowChrome:
+    """Plain borderless top-most window; no platform tricks. Used by the null platform and as
+    the headless default so existing PlatformBundle/StatusPanel/PanelRunner constructions stay valid."""
+
+    preferred_panel_width: int = 280   # the macOS-tuned width; the safe default for every OS
+    panel_scale: float = 1.0           # no DPI multiply (Tk points / headless)
+
+    def set_app_policy(self) -> None:
+        pass
+
+    def style_window(self, root, toplevel, canvas) -> None:
+        try:
+            toplevel.overrideredirect(True)
+            toplevel.attributes("-topmost", True)
+        except Exception:  # noqa: BLE001 — never crash the panel on chrome
+            pass
+
+
 @dataclass(frozen=True)
 class PlatformBundle:
     name: str
@@ -92,3 +127,4 @@ class PlatformBundle:
     focus: FocusProbe
     autostart: AutostartManager
     permissions: PermissionsManager
+    window_chrome: WindowChrome = field(default_factory=NullWindowChrome)
