@@ -54,3 +54,6 @@ hf/
 
 # Skills marketplace lockfile (harness artifact, not project content)
 skills-lock.json
+
+# git worktrees (isolated feature workspaces)
+.worktrees/
