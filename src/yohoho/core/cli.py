@@ -8,7 +8,9 @@ Dispatches subcommands:
   setup      — first-run: hotkey + permissions + model download + autostart
   start      — run the dictation daemon in the background (detaches from the terminal)
   stop       — stop the background agent
-  status / history / logs — stubs (M4)
+  status     — show daemon status (running, state, hotkey, model, permissions)
+  history    — show recent dictation history
+  logs       — show / follow the daemon log
 
 Entry point: ``yohoho.core.cli:main`` (declared in pyproject.toml).
 """
@@ -632,7 +634,10 @@ def run_stop(data_dir: Path, *, grace_s: float = 5.0) -> int:
 
 
 def _format_uptime(seconds: int) -> str:
-    """Format an uptime in seconds as 'Xh Ym Zs' (omitting leading zero units)."""
+    """Format an uptime in seconds as 'Xh Ym Zs' (omitting leading zero units).
+
+    Clamps negatives to 0 so clock skew can never render garbage like '-1h 59m'."""
+    seconds = max(0, seconds)
     h, rem = divmod(seconds, 3600)
     m, s = divmod(rem, 60)
     parts = []
@@ -646,7 +651,7 @@ def _format_uptime(seconds: int) -> str:
 
 def run_status(data_dir: Path, *, json_out: bool = False, platform=None) -> int:
     """Assemble and display the daemon status (running, state, hotkey, model, perms…)."""
-    import json as _json
+    import json
     from datetime import datetime, timezone
 
     from yohoho.core.observability import detect_prior_crash, read_last_error
@@ -660,15 +665,15 @@ def run_status(data_dir: Path, *, json_out: bool = False, platform=None) -> int:
 
     # Read state.json (tolerate missing/malformed)
     state_str: Optional[str] = None
-    started_at_str: Optional[str] = None
-    hotkey_spec: Optional[str] = None
+    started_at_str = None
+    hotkey_spec = None
     state_path = data_dir / "state.json"
     try:
-        raw = _json.loads(state_path.read_text(encoding="utf-8"))
+        raw = json.loads(state_path.read_text(encoding="utf-8"))
         state_str = raw.get("state")
         started_at_str = raw.get("started_at")
         hotkey_spec = raw.get("hotkey")
-    except (FileNotFoundError, _json.JSONDecodeError, OSError):
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
 
     # Hotkey fallback: config.yaml
@@ -678,13 +683,14 @@ def run_status(data_dir: Path, *, json_out: bool = False, platform=None) -> int:
         except Exception:
             hotkey_spec = None
 
-    # Uptime
+    # Uptime — tolerate a machine-written-but-corrupt started_at (wrong type or
+    # garbage string), and clamp clock skew (started_at in the future) to 0.
     uptime_s: Optional[int] = None
     if running and started_at_str:
         try:
             started = datetime.fromisoformat(started_at_str.replace("Z", "+00:00"))
-            uptime_s = int((datetime.now(timezone.utc) - started).total_seconds())
-        except (ValueError, TypeError):
+            uptime_s = max(0, int((datetime.now(timezone.utc) - started).total_seconds()))
+        except (ValueError, TypeError, AttributeError):
             uptime_s = None
 
     # Model ready
@@ -718,16 +724,22 @@ def run_status(data_dir: Path, *, json_out: bool = False, platform=None) -> int:
     }
 
     if json_out:
-        print(_json.dumps(result))
+        print(json.dumps(result))
         return 0
 
     # Human-readable output
     running_str = f"yes (pid {pid})" if running else "no"
     state_display = state_str or "—"
     uptime_display = _format_uptime(uptime_s) if uptime_s is not None else "—"
-    hotkey_display = (
-        f"{format_hotkey(hotkey_spec)} ({hotkey_spec})" if hotkey_spec else "—"
-    )
+    if hotkey_spec:
+        # format_hotkey splits on '+', so a non-str hotkey would crash; fall back
+        # to the raw value (corrupt state.json must never crash status).
+        try:
+            hotkey_display = f"{format_hotkey(hotkey_spec)} ({hotkey_spec})"
+        except (AttributeError, TypeError):
+            hotkey_display = str(hotkey_spec)
+    else:
+        hotkey_display = "—"
     model_display = "ready" if model_ready else "not downloaded"
     if permissions_ok is True:
         perms_display = "OK"
@@ -760,14 +772,15 @@ def run_status(data_dir: Path, *, json_out: bool = False, platform=None) -> int:
 
 def run_history(data_dir: Path, *, n: int = 20, json_out: bool = False) -> int:
     """Display the most recent dictation history entries."""
-    import json as _json
+    import json
 
+    n = max(0, n)  # negative n with rows[::-1][:n] would drop the newest
     rows = HistoryStore(data_dir, enabled=True).read()
-    # Newest-first then take the first n
+    # Newest-first then take the first n (n=0 → empty)
     rows = rows[::-1][:n]
 
     if json_out:
-        print(_json.dumps(rows))
+        print(json.dumps(rows))
         return 0
 
     if not rows:
@@ -792,6 +805,28 @@ def run_history(data_dir: Path, *, n: int = 20, json_out: bool = False) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _read_new(path: Path, offset: int) -> tuple[str, int]:
+    """Read bytes appended to *path* since *offset*. Returns (text, new_offset).
+
+    Binary mode + tell() gives an exact byte offset (no text-mode seek drift and
+    no line-skip race). Resets to 0 if the file shrank (rotation/truncation)."""
+    try:
+        size = path.stat().st_size
+    except OSError:
+        return "", offset
+    if size < offset:        # rotation/truncation → reread from the start
+        offset = 0
+    if size <= offset:
+        return "", offset
+    try:
+        with path.open("rb") as fh:
+            fh.seek(offset)
+            data = fh.read()
+            return data.decode("utf-8", errors="replace"), fh.tell()
+    except OSError:
+        return "", offset
+
+
 def run_logs(data_dir: Path, *, n: int = 50, follow: bool = False) -> int:
     """Display (and optionally follow) the daemon log file."""
     log_path = data_dir / "logs" / "yohoho.log"
@@ -799,43 +834,28 @@ def run_logs(data_dir: Path, *, n: int = 50, follow: bool = False) -> int:
         print("yohoho logs: (no log file yet)")
         return 0
 
-    # Read and print the last n lines
+    # Read and print the last n lines (n=0 → nothing; guard the lines[-0:] trap).
+    n = max(0, n)
     content = log_path.read_text(encoding="utf-8", errors="replace")
     lines = content.splitlines()
-    tail = lines[-n:] if len(lines) > n else lines
+    tail = lines[-n:] if n else []
     for line in tail:
         print(line)
 
     if not follow:
         return 0
 
-    # Follow mode: poll for new content
+    # Follow mode: poll for newly-appended bytes via the pure _read_new helper.
+    offset = log_path.stat().st_size  # start following AFTER the tail we just printed
     try:
-        offset = log_path.stat().st_size
         while True:
             time.sleep(0.5)
-            try:
-                size = log_path.stat().st_size
-            except OSError:
-                continue
-            if size < offset:
-                # File was rotated or truncated — reset to start
-                offset = 0
-            if size == offset:
-                continue
-            try:
-                with log_path.open("r", encoding="utf-8", errors="replace") as fh:
-                    fh.seek(offset)
-                    new_data = fh.read()
-                offset = log_path.stat().st_size
-            except OSError:
-                continue
-            for line in new_data.splitlines():
-                print(line)
+            text, offset = _read_new(log_path, offset)
+            if text:
+                sys.stdout.write(text)
+                sys.stdout.flush()
     except KeyboardInterrupt:
         return 0
-
-    return 0
 
 
 # ---------------------------------------------------------------------------

@@ -435,6 +435,122 @@ def test_logs_no_file(tmp_path, capsys):
     assert "(no log file yet)" in capsys.readouterr().out
 
 
+def test_logs_n_zero_prints_nothing(tmp_path, capsys):
+    """run_logs n=0 prints NOTHING (not the whole file — the lines[-0:] trap)."""
+    from yohoho.core.cli import run_logs
+
+    _write_log_lines(tmp_path, [f"LOG_ENTRY_{i:03d}" for i in range(1, 11)])
+
+    rc = run_logs(tmp_path, n=0)
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert out.strip() == ""
+
+
+# ---------------------------------------------------------------------------
+# T9: _read_new (pure log-follow helper) tests
+# ---------------------------------------------------------------------------
+
+
+def test_read_new_appends(tmp_path):
+    """_read_new returns appended text and an advanced offset."""
+    from yohoho.core.cli import _read_new
+
+    p = tmp_path / "f.log"
+    p.write_bytes(b"hello\n")
+    text, off = _read_new(p, 0)
+    assert text == "hello\n"
+    assert off == 6
+
+    # Append more; reading from the prior offset returns only the new bytes
+    with p.open("ab") as fh:
+        fh.write(b"world\n")
+    text2, off2 = _read_new(p, off)
+    assert text2 == "world\n"
+    assert off2 == 12
+
+
+def test_read_new_resets_on_shrink(tmp_path):
+    """If the file shrinks below offset (rotation), _read_new rereads from start."""
+    from yohoho.core.cli import _read_new
+
+    p = tmp_path / "f.log"
+    p.write_bytes(b"aaaaaaaaaa\n")  # 11 bytes
+    _, off = _read_new(p, 0)
+    assert off == 11
+
+    # Rotation/truncation: file is now smaller than the old offset
+    p.write_bytes(b"new\n")  # 4 bytes
+    text, off2 = _read_new(p, off)
+    assert text == "new\n"   # full new content, read from 0
+    assert off2 == 4
+
+
+def test_read_new_partial_line_not_duplicated(tmp_path):
+    """A partial line (no trailing newline) is returned verbatim and NOT
+    re-emitted once the rest of the line + newline arrives."""
+    from yohoho.core.cli import _read_new
+
+    p = tmp_path / "f.log"
+    p.write_bytes(b"par")           # partial — no newline yet
+    text1, off1 = _read_new(p, 0)
+    assert text1 == "par"
+    assert off1 == 3
+
+    with p.open("ab") as fh:
+        fh.write(b"tial\n")         # completes the line
+    text2, off2 = _read_new(p, off1)
+    assert text2 == "tial\n"        # only the NEW bytes — "par" not repeated
+    assert off2 == 8
+
+
+# ---------------------------------------------------------------------------
+# T9: _format_uptime tests
+# ---------------------------------------------------------------------------
+
+
+def test_format_uptime_variants():
+    from yohoho.core.cli import _format_uptime
+
+    assert _format_uptime(0) == "0s"
+    assert _format_uptime(45) == "45s"
+    assert _format_uptime(3600) == "1h 0m 0s"
+    assert _format_uptime(3 * 3600 + 12 * 60 + 7) == "3h 12m 7s"
+    assert _format_uptime(192) == "3m 12s"
+
+
+def test_format_uptime_negative_clamped():
+    """Negative uptime (clock skew) renders as 0s, not garbage."""
+    from yohoho.core.cli import _format_uptime
+
+    assert _format_uptime(-5) == "0s"
+
+
+# ---------------------------------------------------------------------------
+# T9: malformed-TYPE state.json tolerance (status must never crash)
+# ---------------------------------------------------------------------------
+
+
+def test_status_tolerates_wrong_typed_state_json(tmp_path, capsys):
+    """A machine-written-but-corrupt state.json (wrong value TYPES) must not
+    crash status: int started_at + int hotkey → prints, uptime '—'."""
+    from yohoho.core.cli import run_status
+
+    (tmp_path / "yohoho.pid").write_text(str(os.getpid()), encoding="utf-8")
+    (tmp_path / "state.json").write_text(
+        json.dumps({"pid": os.getpid(), "state": "idle", "hotkey": 42, "started_at": 123}),
+        encoding="utf-8",
+    )
+
+    rc = run_status(tmp_path, platform=_FakePlatform(ok=True))
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "running" in out
+    # Uptime could not be parsed from an int started_at → shows the em-dash
+    assert "uptime: —" in out
+
+
 # ---------------------------------------------------------------------------
 # T9: no marker side-effects
 # ---------------------------------------------------------------------------
