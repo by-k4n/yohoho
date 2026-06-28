@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections.abc import Sequence
 from . import platform_api as pa
 
 
@@ -73,10 +74,10 @@ class _NullPermissions:
 
 class NullProcessController:
     def __init__(self) -> None:
-        self.spawned: list = []
-        self.terminated: list = []
+        self.spawned: list[list[str]] = []
+        self.terminated: list[tuple[int, bool]] = []
 
-    def spawn_detached(self, argv) -> int:
+    def spawn_detached(self, argv: Sequence[str]) -> int:
         self.spawned.append(list(argv))
         return 424242
 

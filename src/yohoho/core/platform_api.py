@@ -1,4 +1,5 @@
 from __future__ import annotations
+from collections.abc import Sequence
 from typing import Protocol, runtime_checkable, Callable, Literal, Optional
 from dataclasses import dataclass, field
 
@@ -134,7 +135,7 @@ class NullHotkeyCapturer:
 
 @runtime_checkable
 class ProcessController(Protocol):
-    def spawn_detached(self, argv) -> int: ...
+    def spawn_detached(self, argv: Sequence[str]) -> int: ...
     def is_alive(self, pid: int) -> bool: ...
     def terminate(self, pid: int, graceful: bool = True) -> None: ...
 
