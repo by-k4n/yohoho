@@ -117,6 +117,9 @@ SETTING_DESCRIPTIONS = {
 
 def _resolve_data_dir() -> Path:
     """Return the platform-appropriate local data directory for yohoho."""
+    override = os.environ.get("YOHOHO_DATA_DIR")
+    if override:
+        return Path(override)
     if sys.platform == "win32":
         return Path(os.environ["LOCALAPPDATA"]) / "yohoho"
     if sys.platform == "darwin":
