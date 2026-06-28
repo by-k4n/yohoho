@@ -1,5 +1,4 @@
 import os
-import pytest
 from yohoho.core.daemon import PidFile
 
 def test_acquire_writes_own_pid(tmp_path):
@@ -31,3 +30,15 @@ def test_release_removes_file(tmp_path):
 
 def test_is_running_false_when_no_file(tmp_path):
     assert PidFile(tmp_path).is_running() is False
+
+def test_acquire_blocks_against_live_holder(tmp_path):
+    pf = PidFile(tmp_path)
+    assert pf.acquire() is True
+    other = PidFile(tmp_path)
+    assert other.acquire() is False
+
+def test_acquire_blocks_against_live_foreign_holder(tmp_path):
+    (tmp_path / "yohoho.pid").write_text("999999")
+    pf = PidFile(tmp_path, alive=lambda pid: True)
+    assert pf.acquire() is False
+    assert pf.read_pid() == 999999
