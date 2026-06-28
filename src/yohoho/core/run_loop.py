@@ -64,7 +64,7 @@ def handle_activation(controller, recorder, put, chimes=None) -> None:
     # would re-feed the recorder and paste the same transcript twice.
 
 
-def run_start_loop(data_dir) -> None:
+def run_start_loop(data_dir, state_writer=None) -> None:
     """Wire the panel (main thread) + hotkey listener + controller (real bundle) + recorder.
 
     Reuses the M2 inverted run-structure: Tk mainloop owns the main thread; a
@@ -138,11 +138,15 @@ def run_start_loop(data_dir) -> None:
         """
         try:
             from yohoho.core.cli import _make_engine
+            if state_writer is not None:
+                state_writer.set("loading")
             engine = _make_engine(data_dir)
             engine.load()
             warmup = getattr(engine, "warmup", None)
             if callable(warmup):
                 warmup()
+            if state_writer is not None:
+                state_writer.set("idle")
             hist = HistoryStore(
                 data_dir,
                 enabled=cfg.history["enabled"],
@@ -154,12 +158,17 @@ def run_start_loop(data_dir) -> None:
                 if e.kind is Terminal.DONE:
                     chimes.play_end()  # dictation finished (text inserted) — "off" chime
 
+            def _on_status(s) -> None:
+                q.put({"t": "state", "state": s})
+                if state_writer is not None:
+                    state_writer.set(s)
+
             controller = Controller(
                 engine=engine,
                 bundle=bundle,
                 history=hist,
                 on_terminal=_on_terminal,
-                on_status=lambda s: q.put({"t": "state", "state": s}),
+                on_status=_on_status,
             )
             recorder = Recorder(
                 device_index=resolved_device,
@@ -195,11 +204,14 @@ def run_start_loop(data_dir) -> None:
     # default (None) so a terminal does NOT stop the runner.
     # Exit paths:
     #   Ctrl+C (SIGINT) — ends cleanly: the `finally` block runs hk.stop().
-    #   `yohoho stop` / launchctl SIGTERM — kills the process immediately via
-    #     Python's default SIGTERM handler; the daemon listener dies with it;
-    #     the `finally` block does NOT run.
+    #   `yohoho stop` — writes data_dir/stop; the poll loop detects and removes
+    #     it, stops the runner cleanly, and the `finally` block runs hk.stop().
+    #   launchd bootout (SIGTERM) — now handled gracefully: the signal handler
+    #     flips the stop flag; the poll loop stops the runner; `finally` runs.
+    stop_sentinel = data_dir / "stop"
     runner = PanelRunner(root, panel, model, q, executor=executor,
-                         window_chrome=plat.window_chrome)
+                         window_chrome=plat.window_chrome,
+                         stop_sentinel=stop_sentinel)
 
     # Main-thread platform prep BEFORE the worker arms the listener: on macOS the
     # pynput listener thread calls a main-thread-only keyboard API, which SIGTRAPs

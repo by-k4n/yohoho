@@ -20,6 +20,7 @@ import math
 import queue
 import signal
 import tkinter
+from pathlib import Path
 from typing import Callable, Iterator, Optional
 
 from yohoho.core.events import ErrorCode, State, Terminal
@@ -70,6 +71,7 @@ class PanelRunner:
         on_done: Optional[Callable[[], None]] = None,
         executor: Optional[MainThreadExecutor] = None,
         window_chrome: Optional[WindowChrome] = None,
+        stop_sentinel: Optional[Path] = None,
     ) -> None:
         self.root = root
         self.panel = panel
@@ -81,6 +83,11 @@ class PanelRunner:
         # this (main) thread so they never race the panel's render. See M3 crash.
         self._executor = executor
         self._window_chrome = window_chrome or NullWindowChrome()
+        # Optional stop-sentinel file path: the primary cross-platform graceful-stop
+        # trigger.  `yohoho stop` writes this file; `_poll_signal` detects and
+        # removes it, then calls stop().  Works even when signals can't reach the
+        # process (e.g. Windows DETACHED_PROCESS children).
+        self._stop_sentinel = stop_sentinel
 
         self._drain_id: Optional[str] = None
         self._tick_id: Optional[str] = None
@@ -90,6 +97,7 @@ class PanelRunner:
         self._stopped = False
         self._sigint = False
         self._old_sigint = None
+        self._old_sigterm = None
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -105,10 +113,12 @@ class PanelRunner:
         """
         self._window_chrome.set_app_policy()
 
-        # Ctrl+C: Tk's mainloop doesn't reliably deliver SIGINT on macOS, so the
-        # handler only flips a flag and a polled after-loop performs the actual
-        # (Tk-thread-safe) shutdown.
+        # Ctrl+C / SIGTERM: Tk's mainloop doesn't reliably deliver signals on
+        # macOS, so the handlers only flip a flag and a polled after-loop performs
+        # the actual (Tk-thread-safe) shutdown.  SIGTERM handles launchd bootout.
+        # Both signals share the same flag and handler.
         self._old_sigint = signal.signal(signal.SIGINT, self._on_sigint)
+        self._old_sigterm = signal.signal(signal.SIGTERM, self._on_sigint)
 
         self._drain_id = self.root.after(_DRAIN_MS, self._drain)
         self._tick_id = self.root.after(_TICK_MS, self._tick)
@@ -140,13 +150,19 @@ class PanelRunner:
                     pass
                 setattr(self, attr, None)
 
-        # Restore the previous SIGINT handler so we don't leak our flag-setter.
+        # Restore the previous SIGINT and SIGTERM handlers so we don't leak our flag-setter.
         if self._old_sigint is not None:
             try:
                 signal.signal(signal.SIGINT, self._old_sigint)
             except (TypeError, ValueError):
                 pass
             self._old_sigint = None
+        if self._old_sigterm is not None:
+            try:
+                signal.signal(signal.SIGTERM, self._old_sigterm)
+            except (TypeError, ValueError):
+                pass
+            self._old_sigterm = None
 
         try:
             self.root.quit()
@@ -249,8 +265,15 @@ class PanelRunner:
         self._sigint = True
 
     def _poll_signal(self) -> None:
-        """Polled from the Tk thread; stop cleanly once SIGINT was seen."""
+        """Polled from the Tk thread; stop cleanly once SIGINT/SIGTERM was seen
+        or the stop-sentinel file appears (primary cross-platform stop trigger).
+        """
         if self._sigint:
+            self.stop()
+            return
+        if self._stop_sentinel is not None and self._stop_sentinel.exists():
+            # Remove the sentinel before stopping so a second poll can't re-fire.
+            self._stop_sentinel.unlink()
             self.stop()
             return
         self._signal_id = self.root.after(_SIGNAL_POLL_MS, self._poll_signal)
