@@ -71,6 +71,22 @@ class _NullPermissions:
         return "No permissions required."
 
 
+class NullProcessController:
+    def __init__(self) -> None:
+        self.spawned: list = []
+        self.terminated: list = []
+
+    def spawn_detached(self, argv) -> int:
+        self.spawned.append(list(argv))
+        return 424242
+
+    def is_alive(self, pid: int) -> bool:
+        return False
+
+    def terminate(self, pid: int, graceful: bool = True) -> None:
+        self.terminated.append((pid, graceful))
+
+
 def make_null_platform() -> pa.PlatformBundle:
     clip = _NullClipboard()
     return pa.PlatformBundle(

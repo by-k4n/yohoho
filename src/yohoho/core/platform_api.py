@@ -132,6 +132,13 @@ class NullHotkeyCapturer:
         return None
 
 
+@runtime_checkable
+class ProcessController(Protocol):
+    def spawn_detached(self, argv) -> int: ...
+    def is_alive(self, pid: int) -> bool: ...
+    def terminate(self, pid: int, graceful: bool = True) -> None: ...
+
+
 @dataclass(frozen=True)
 class PlatformBundle:
     name: str
