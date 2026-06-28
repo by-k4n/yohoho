@@ -1,7 +1,9 @@
 """Background daemon: pidfile single-instance lock, live state file, and the
 daemon body run_daemon() — the single entry the future signed .app also calls."""
 from __future__ import annotations
+import json
 import os
+import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
@@ -69,5 +71,32 @@ class PidFile:
         try:
             if self.read_pid() == os.getpid():
                 self._path.unlink()
+        except FileNotFoundError:
+            pass
+
+
+_STATE_NAME = "state.json"
+
+
+class StateWriter:
+    def __init__(self, data_dir, *, hotkey: str, started_at: str) -> None:
+        self._path = Path(data_dir) / _STATE_NAME
+        self._base = {"pid": os.getpid(), "hotkey": hotkey, "started_at": started_at}
+
+    def set(self, state: str) -> None:
+        payload = {**self._base, "state": state}
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=self._path.parent, suffix=".tmp")
+        try:
+            with os.fdopen(fd, "w") as f:
+                json.dump(payload, f)
+            os.replace(tmp, self._path)
+        finally:
+            if os.path.exists(tmp):
+                os.unlink(tmp)
+
+    def clear(self) -> None:
+        try:
+            self._path.unlink()
         except FileNotFoundError:
             pass

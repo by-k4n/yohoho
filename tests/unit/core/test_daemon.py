@@ -1,5 +1,6 @@
+import json
 import os
-from yohoho.core.daemon import PidFile
+from yohoho.core.daemon import PidFile, StateWriter
 
 def test_acquire_writes_own_pid(tmp_path):
     pf = PidFile(tmp_path)
@@ -42,3 +43,28 @@ def test_acquire_blocks_against_live_foreign_holder(tmp_path):
     pf = PidFile(tmp_path, alive=lambda pid: True)
     assert pf.acquire() is False
     assert pf.read_pid() == 999999
+
+
+def test_state_writer_writes_atomic_json(tmp_path):
+    sw = StateWriter(tmp_path, hotkey="rcmd", started_at="2026-06-28T00:00:00Z")
+    sw.set("loading")
+    data = json.loads((tmp_path / "state.json").read_text())
+    assert data["state"] == "loading"
+    assert data["pid"] == os.getpid()
+    assert data["hotkey"] == "rcmd"
+    assert data["started_at"] == "2026-06-28T00:00:00Z"
+
+
+def test_state_writer_overwrites(tmp_path):
+    sw = StateWriter(tmp_path, hotkey="rcmd", started_at="t")
+    sw.set("loading")
+    sw.set("idle")
+    sw.set("recording")
+    assert json.loads((tmp_path / "state.json").read_text())["state"] == "recording"
+
+
+def test_state_writer_clear_removes_file(tmp_path):
+    sw = StateWriter(tmp_path, hotkey="rcmd", started_at="t")
+    sw.set("idle")
+    sw.clear()
+    assert not (tmp_path / "state.json").exists()
