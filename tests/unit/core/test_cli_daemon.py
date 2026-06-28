@@ -257,12 +257,17 @@ def _write_state_json(data_dir, state="idle", hotkey="ctrl+alt+space", started_a
 
 
 def test_status_running(tmp_path, capsys):
-    """status with a running daemon shows running=yes, the state, and hotkey."""
+    """status with a running daemon shows running=yes, the state, and hotkey —
+    and must NOT report a crash even though mark_running leaves the 'running'
+    marker on disk for the daemon's whole lifetime."""
     from yohoho.core.cli import run_status
 
     # Write a live pidfile pointing at the current process
     (tmp_path / "yohoho.pid").write_text(str(os.getpid()), encoding="utf-8")
     _write_state_json(tmp_path, state="idle", hotkey="ctrl+alt+space")
+    # Mimic what observability.mark_running leaves on disk for a live daemon:
+    # the 'running' marker present and no 'clean_shutdown' marker.
+    (tmp_path / "running").write_text("1", encoding="utf-8")
 
     rc = run_status(tmp_path, platform=_FakePlatform(ok=True))
 
@@ -272,6 +277,47 @@ def test_status_running(tmp_path, capsys):
     assert "yes" in out
     assert "idle" in out
     assert "ctrl+alt+space" in out
+    # A live daemon is healthy — never "crashed".
+    assert "crashed" not in out
+    assert "last run: clean" in out
+
+
+def test_status_running_json_not_crashed(tmp_path, capsys):
+    """--json crashed_last_run is False for a live daemon, even with the
+    'running' marker on disk (regression: gated on liveness)."""
+    from yohoho.core.cli import run_status
+
+    (tmp_path / "yohoho.pid").write_text(str(os.getpid()), encoding="utf-8")
+    _write_state_json(tmp_path)
+    (tmp_path / "running").write_text("1", encoding="utf-8")
+
+    rc = run_status(tmp_path, json_out=True, platform=_FakePlatform(ok=True))
+
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["running"] is True
+    assert data["crashed_last_run"] is False
+
+
+def test_status_reports_crash_when_down_after_unclean_exit(tmp_path, capsys):
+    """A dead daemon with the 'running' marker and no 'clean_shutdown' (kill -9)
+    is correctly reported as crashed — human + --json."""
+    from yohoho.core.cli import run_status
+
+    # Dead pid + running marker, no clean_shutdown marker = unclean exit.
+    (tmp_path / "yohoho.pid").write_text("999999", encoding="utf-8")
+    (tmp_path / "running").write_text("1", encoding="utf-8")
+
+    rc = run_status(tmp_path, platform=_FakePlatform(ok=True))
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "last run: crashed" in out
+
+    rc = run_status(tmp_path, json_out=True, platform=_FakePlatform(ok=True))
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert data["running"] is False
+    assert data["crashed_last_run"] is True
 
 
 def test_status_not_running(tmp_path, capsys):

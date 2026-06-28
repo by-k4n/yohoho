@@ -99,8 +99,9 @@ def _on_terminal(ev) -> None:  # noqa: ANN001
     """Print error details to stderr; stay silent on DONE/CANCELLED."""
     if ev.kind == Terminal.ERROR:
         code = ev.code.value if ev.code is not None else "UNKNOWN"
-        # TODO(M4): also persist via observability.record_error(data_dir, code, ...) so
-        # `yohoho status` can surface the last error after the panel/process is gone.
+        # Error persistence (for `yohoho status` last-error) is the daemon's job:
+        # run_loop wires observability.record_error into both error surfaces. The
+        # one-shot `dictate` dev command has no daemon, so it prints to stderr only.
         print(f"yohoho: error {code}", file=sys.stderr)
 
 
@@ -696,8 +697,10 @@ def run_status(data_dir: Path, *, json_out: bool = False, platform=None) -> int:
     # Model ready
     model_ready: bool = (data_dir / "model_ready").exists()
 
-    # Crash / last error
-    crashed_last_run: bool = detect_prior_crash(data_dir)
+    # Crash / last error. A healthy run_daemon leaves the 'running' marker in
+    # place for its whole lifetime (mark_running), so detect_prior_crash is True
+    # while alive — gate on liveness so a running daemon never shows "crashed".
+    crashed_last_run: bool = (not running) and detect_prior_crash(data_dir)
     last_error = read_last_error(data_dir)
 
     # Permissions — best-effort; never crash status
