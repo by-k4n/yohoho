@@ -69,3 +69,25 @@ def test_macos_terminate_dead_pid_does_not_raise():
     # A pid that does not exist must be treated as already-terminated, never raise.
     pc.terminate(999999, graceful=True)
     pc.terminate(999999, graceful=False)
+
+
+windows_only = pytest.mark.skipif(sys.platform != "win32", reason="Windows only")
+
+
+@windows_only
+def test_windows_is_alive_self():
+    from yohoho.platform.windows.process import WindowsProcessController
+
+    pc = WindowsProcessController()
+    assert pc.is_alive(os.getpid()) is True
+    assert pc.is_alive(999999) is False
+
+
+@windows_only
+def test_windows_terminate_dead_pid_does_not_raise():
+    from yohoho.platform.windows.process import WindowsProcessController
+
+    pc = WindowsProcessController()
+    # A pid that does not exist must be treated as already-terminated, never raise.
+    pc.terminate(999999, graceful=True)
+    pc.terminate(999999, graceful=False)
