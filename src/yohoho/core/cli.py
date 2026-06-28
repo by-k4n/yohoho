@@ -627,10 +627,220 @@ def run_stop(data_dir: Path, *, grace_s: float = 5.0) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Parser
+# status command (T9)
 # ---------------------------------------------------------------------------
 
-_STUB_CMDS = ("status", "history", "logs")
+
+def _format_uptime(seconds: int) -> str:
+    """Format an uptime in seconds as 'Xh Ym Zs' (omitting leading zero units)."""
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    parts = []
+    if h:
+        parts.append(f"{h}h")
+    if m or h:
+        parts.append(f"{m}m")
+    parts.append(f"{s}s")
+    return " ".join(parts)
+
+
+def run_status(data_dir: Path, *, json_out: bool = False, platform=None) -> int:
+    """Assemble and display the daemon status (running, state, hotkey, model, perms…)."""
+    import json as _json
+    from datetime import datetime, timezone
+
+    from yohoho.core.observability import detect_prior_crash, read_last_error
+    from yohoho.core.run_loop import format_hotkey
+
+    data_dir = Path(data_dir)
+    pidfile = PidFile(data_dir)
+
+    running = pidfile.is_running()
+    pid = pidfile.read_pid()
+
+    # Read state.json (tolerate missing/malformed)
+    state_str: Optional[str] = None
+    started_at_str: Optional[str] = None
+    hotkey_spec: Optional[str] = None
+    state_path = data_dir / "state.json"
+    try:
+        raw = _json.loads(state_path.read_text(encoding="utf-8"))
+        state_str = raw.get("state")
+        started_at_str = raw.get("started_at")
+        hotkey_spec = raw.get("hotkey")
+    except (FileNotFoundError, _json.JSONDecodeError, OSError):
+        pass
+
+    # Hotkey fallback: config.yaml
+    if hotkey_spec is None:
+        try:
+            hotkey_spec = load_config(data_dir / "config.yaml").hotkey
+        except Exception:
+            hotkey_spec = None
+
+    # Uptime
+    uptime_s: Optional[int] = None
+    if running and started_at_str:
+        try:
+            started = datetime.fromisoformat(started_at_str.replace("Z", "+00:00"))
+            uptime_s = int((datetime.now(timezone.utc) - started).total_seconds())
+        except (ValueError, TypeError):
+            uptime_s = None
+
+    # Model ready
+    model_ready: bool = (data_dir / "model_ready").exists()
+
+    # Crash / last error
+    crashed_last_run: bool = detect_prior_crash(data_dir)
+    last_error = read_last_error(data_dir)
+
+    # Permissions — best-effort; never crash status
+    permissions_ok: Optional[bool] = None
+    try:
+        if platform is None:
+            from yohoho.core.platform_factory import get_platform  # noqa: PLC0415
+            platform = get_platform()
+        permissions_ok = platform.permissions.check().ok
+    except Exception:
+        permissions_ok = None
+
+    result = {
+        "running": running,
+        "pid": pid,
+        "state": state_str,
+        "started_at": started_at_str,
+        "hotkey": hotkey_spec,
+        "uptime_s": uptime_s,
+        "model_ready": model_ready,
+        "crashed_last_run": crashed_last_run,
+        "last_error": last_error,
+        "permissions_ok": permissions_ok,
+    }
+
+    if json_out:
+        print(_json.dumps(result))
+        return 0
+
+    # Human-readable output
+    running_str = f"yes (pid {pid})" if running else "no"
+    state_display = state_str or "—"
+    uptime_display = _format_uptime(uptime_s) if uptime_s is not None else "—"
+    hotkey_display = (
+        f"{format_hotkey(hotkey_spec)} ({hotkey_spec})" if hotkey_spec else "—"
+    )
+    model_display = "ready" if model_ready else "not downloaded"
+    if permissions_ok is True:
+        perms_display = "OK"
+    elif permissions_ok is False:
+        perms_display = "NOT OK"
+    else:
+        perms_display = "unknown"
+    crash_display = "crashed" if crashed_last_run else "clean"
+    if last_error:
+        err_display = f"{last_error.get('code', '?')} — {last_error.get('message', '')} ({last_error.get('ts', '')})"
+    else:
+        err_display = "none"
+
+    print("yohoho status:")
+    print(f"  running: {running_str}")
+    print(f"  state: {state_display}")
+    print(f"  uptime: {uptime_display}")
+    print(f"  hotkey: {hotkey_display}")
+    print(f"  model: {model_display}")
+    print(f"  permissions: {perms_display}")
+    print(f"  last run: {crash_display}")
+    print(f"  last error: {err_display}")
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# history command (T9)
+# ---------------------------------------------------------------------------
+
+
+def run_history(data_dir: Path, *, n: int = 20, json_out: bool = False) -> int:
+    """Display the most recent dictation history entries."""
+    import json as _json
+
+    rows = HistoryStore(data_dir, enabled=True).read()
+    # Newest-first then take the first n
+    rows = rows[::-1][:n]
+
+    if json_out:
+        print(_json.dumps(rows))
+        return 0
+
+    if not rows:
+        print("yohoho history: (empty)")
+        return 0
+
+    for entry in rows:
+        ts = entry.get("ts", "")
+        outcome = entry.get("outcome", "")
+        word_count = entry.get("word_count", 0)
+        text = entry.get("text", "")
+        # Truncate long text for the human view
+        if len(text) > 80:
+            text = text[:77] + "..."
+        print(f"{ts} · {outcome} · {word_count} words · {text}")
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# logs command (T9)
+# ---------------------------------------------------------------------------
+
+
+def run_logs(data_dir: Path, *, n: int = 50, follow: bool = False) -> int:
+    """Display (and optionally follow) the daemon log file."""
+    log_path = data_dir / "logs" / "yohoho.log"
+    if not log_path.exists():
+        print("yohoho logs: (no log file yet)")
+        return 0
+
+    # Read and print the last n lines
+    content = log_path.read_text(encoding="utf-8", errors="replace")
+    lines = content.splitlines()
+    tail = lines[-n:] if len(lines) > n else lines
+    for line in tail:
+        print(line)
+
+    if not follow:
+        return 0
+
+    # Follow mode: poll for new content
+    try:
+        offset = log_path.stat().st_size
+        while True:
+            time.sleep(0.5)
+            try:
+                size = log_path.stat().st_size
+            except OSError:
+                continue
+            if size < offset:
+                # File was rotated or truncated — reset to start
+                offset = 0
+            if size == offset:
+                continue
+            try:
+                with log_path.open("r", encoding="utf-8", errors="replace") as fh:
+                    fh.seek(offset)
+                    new_data = fh.read()
+                offset = log_path.stat().st_size
+            except OSError:
+                continue
+            for line in new_data.splitlines():
+                print(line)
+    except KeyboardInterrupt:
+        return 0
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Parser
+# ---------------------------------------------------------------------------
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -747,9 +957,45 @@ def build_parser() -> argparse.ArgumentParser:
     # -- _run-daemon (hidden: invoked by the detached child process) ----------
     subparsers.add_parser("_run-daemon", help=argparse.SUPPRESS)
 
-    # -- stubs ----------------------------------------------------------------
-    for cmd in _STUB_CMDS:
-        subparsers.add_parser(cmd, help=f"{cmd}: not yet implemented (M4)")
+    # -- status ---------------------------------------------------------------
+    status_p = subparsers.add_parser(
+        "status",
+        help="Show daemon status (running, state, hotkey, model, permissions)",
+    )
+    status_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Output the status as JSON",
+    )
+
+    # -- history --------------------------------------------------------------
+    history_p = subparsers.add_parser("history", help="Show recent dictation history")
+    history_p.add_argument(
+        "-n",
+        type=int,
+        default=20,
+        help="Number of entries (default: 20)",
+    )
+    history_p.add_argument(
+        "--json",
+        action="store_true",
+        help="Output raw JSON",
+    )
+
+    # -- logs -----------------------------------------------------------------
+    logs_p = subparsers.add_parser("logs", help="Show the daemon log")
+    logs_p.add_argument(
+        "-n",
+        type=int,
+        default=50,
+        help="Number of lines (default: 50)",
+    )
+    logs_p.add_argument(
+        "-f",
+        "--follow",
+        action="store_true",
+        help="Follow the log (Ctrl+C to exit)",
+    )
 
     return parser
 
@@ -793,8 +1039,12 @@ def main(argv=None) -> int:  # noqa: ANN001
         return run_start(dd)
     elif args.cmd == "stop":
         return run_stop(dd)
-    elif args.cmd in _STUB_CMDS:
-        print(f"{args.cmd}: not yet implemented (M4)")
+    elif args.cmd == "status":
+        return run_status(dd, json_out=args.json)
+    elif args.cmd == "history":
+        return run_history(dd, n=args.n, json_out=args.json)
+    elif args.cmd == "logs":
+        return run_logs(dd, n=args.n, follow=args.follow)
     else:
         parser.print_help()
         return 2

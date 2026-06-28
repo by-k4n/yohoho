@@ -1,10 +1,36 @@
-"""T8 tests: real start/stop daemon control + hidden _run-daemon + marker un-scoping."""
+"""T8 + T9 tests: real start/stop daemon control + status/history/logs readers."""
 from __future__ import annotations
+
+import json
+import os
 
 import yohoho.core.cli as cli
 from yohoho.core.cli import main, run_start, run_stop
 from yohoho.core.daemon import PidFile
 from yohoho.core.null_platform import NullProcessController
+
+
+# ---------------------------------------------------------------------------
+# Fake platform for injectable permission checks (T9)
+# ---------------------------------------------------------------------------
+
+
+class _FakePermResult:
+    def __init__(self, ok: bool = True) -> None:
+        self.ok = ok
+
+
+class _FakePermissions:
+    def __init__(self, ok: bool = True) -> None:
+        self._ok = ok
+
+    def check(self) -> _FakePermResult:
+        return _FakePermResult(ok=self._ok)
+
+
+class _FakePlatform:
+    def __init__(self, ok: bool = True) -> None:
+        self.permissions = _FakePermissions(ok=ok)
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +233,220 @@ def test_non_daemon_commands_do_not_write_markers(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "_default_data_dir", lambda: tmp_path)
 
     main(["status"])
+
+    assert not (tmp_path / "running").exists()
+    assert not (tmp_path / "clean_shutdown").exists()
+
+
+# ---------------------------------------------------------------------------
+# T9: run_status tests
+# ---------------------------------------------------------------------------
+
+
+def _write_state_json(data_dir, state="idle", hotkey="ctrl+alt+space", started_at=None):
+    import time as _time
+    if started_at is None:
+        started_at = _time.strftime("%Y-%m-%dT%H:%M:%SZ", _time.gmtime())
+    payload = {
+        "pid": os.getpid(),
+        "state": state,
+        "hotkey": hotkey,
+        "started_at": started_at,
+    }
+    (data_dir / "state.json").write_text(json.dumps(payload), encoding="utf-8")
+
+
+def test_status_running(tmp_path, capsys):
+    """status with a running daemon shows running=yes, the state, and hotkey."""
+    from yohoho.core.cli import run_status
+
+    # Write a live pidfile pointing at the current process
+    (tmp_path / "yohoho.pid").write_text(str(os.getpid()), encoding="utf-8")
+    _write_state_json(tmp_path, state="idle", hotkey="ctrl+alt+space")
+
+    rc = run_status(tmp_path, platform=_FakePlatform(ok=True))
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "running" in out
+    assert "yes" in out
+    assert "idle" in out
+    assert "ctrl+alt+space" in out
+
+
+def test_status_not_running(tmp_path, capsys):
+    """status with no pidfile shows running=no."""
+    from yohoho.core.cli import run_status
+
+    rc = run_status(tmp_path, platform=_FakePlatform(ok=True))
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "running" in out
+    assert "no" in out
+
+
+def test_status_json(tmp_path, capsys):
+    """--json flag emits valid JSON with expected keys."""
+    from yohoho.core.cli import run_status
+
+    (tmp_path / "yohoho.pid").write_text(str(os.getpid()), encoding="utf-8")
+    _write_state_json(tmp_path)
+
+    rc = run_status(tmp_path, json_out=True, platform=_FakePlatform(ok=True))
+
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    for key in ("running", "state", "hotkey", "model_ready", "crashed_last_run", "last_error"):
+        assert key in data, f"missing key: {key}"
+
+
+def test_status_permissions_ok_true(tmp_path, capsys):
+    """permissions field shows OK when fake platform returns ok=True."""
+    from yohoho.core.cli import run_status
+
+    run_status(tmp_path, platform=_FakePlatform(ok=True))
+    out = capsys.readouterr().out
+    assert "OK" in out
+
+
+def test_status_permissions_ok_false(tmp_path, capsys):
+    """permissions field shows NOT OK when fake platform returns ok=False."""
+    from yohoho.core.cli import run_status
+
+    run_status(tmp_path, platform=_FakePlatform(ok=False))
+    out = capsys.readouterr().out
+    assert "NOT OK" in out
+
+
+def test_status_permissions_exception_shows_unknown(tmp_path, capsys):
+    """permissions field shows 'unknown' if the platform raises."""
+    from yohoho.core.cli import run_status
+
+    class _BrokenPlatform:
+        class permissions:
+            @staticmethod
+            def check():
+                raise RuntimeError("pyobjc not available")
+
+    run_status(tmp_path, platform=_BrokenPlatform())
+    out = capsys.readouterr().out
+    assert "unknown" in out
+
+
+# ---------------------------------------------------------------------------
+# T9: run_history tests
+# ---------------------------------------------------------------------------
+
+
+def _write_history_jsonl(data_dir, records):
+    """Write records (list of dicts) as JSONL to data_dir/history.jsonl."""
+    lines = "\n".join(json.dumps(r) for r in records) + "\n"
+    (data_dir / "history.jsonl").write_text(lines, encoding="utf-8")
+
+
+def test_history_newest_first_and_limit(tmp_path, capsys):
+    """run_history with n=2 returns the 2 newest; oldest is absent."""
+    from yohoho.core.cli import run_history
+
+    records = [
+        {"v": 1, "id": "a", "ts": "2026-06-28T10:00:00+00:00", "dur_s": 1.0,
+         "len": 5, "word_count": 1, "outcome": "PASTED", "text": "alpha"},
+        {"v": 1, "id": "b", "ts": "2026-06-28T11:00:00+00:00", "dur_s": 1.0,
+         "len": 4, "word_count": 1, "outcome": "PASTED", "text": "beta"},
+        {"v": 1, "id": "c", "ts": "2026-06-28T12:00:00+00:00", "dur_s": 1.0,
+         "len": 5, "word_count": 1, "outcome": "COPIED", "text": "gamma"},
+    ]
+    _write_history_jsonl(tmp_path, records)
+
+    rc = run_history(tmp_path, n=2)
+
+    assert rc == 0
+    out = capsys.readouterr().out
+    assert "gamma" in out   # newest
+    assert "beta" in out    # second newest
+    assert "alpha" not in out  # oldest — excluded by n=2
+
+
+def test_history_empty(tmp_path, capsys):
+    """run_history on empty dir prints (empty)."""
+    from yohoho.core.cli import run_history
+
+    rc = run_history(tmp_path)
+    assert rc == 0
+    assert "(empty)" in capsys.readouterr().out
+
+
+def test_history_json(tmp_path, capsys):
+    """--json emits valid JSON list of the selected entries."""
+    from yohoho.core.cli import run_history
+
+    records = [
+        {"v": 1, "id": "x", "ts": "2026-06-28T09:00:00+00:00", "dur_s": 1.0,
+         "len": 3, "word_count": 1, "outcome": "PASTED", "text": "foo"},
+        {"v": 1, "id": "y", "ts": "2026-06-28T10:00:00+00:00", "dur_s": 1.0,
+         "len": 3, "word_count": 1, "outcome": "PASTED", "text": "bar"},
+    ]
+    _write_history_jsonl(tmp_path, records)
+
+    rc = run_history(tmp_path, n=5, json_out=True)
+    assert rc == 0
+    data = json.loads(capsys.readouterr().out)
+    assert isinstance(data, list)
+    # newest first: bar then foo
+    assert data[0]["text"] == "bar"
+    assert data[1]["text"] == "foo"
+
+
+# ---------------------------------------------------------------------------
+# T9: run_logs tests
+# ---------------------------------------------------------------------------
+
+
+def _write_log_lines(data_dir, lines):
+    log_dir = data_dir / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    (log_dir / "yohoho.log").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def test_logs_tail(tmp_path, capsys):
+    """run_logs n=5 prints the last 5 lines, not the first 5."""
+    from yohoho.core.cli import run_logs
+
+    # Use distinct non-overlapping labels to avoid substring confusion
+    all_lines = [f"LOG_ENTRY_{i:03d}" for i in range(1, 11)]  # LOG_ENTRY_001 .. LOG_ENTRY_010
+    _write_log_lines(tmp_path, all_lines)
+
+    rc = run_logs(tmp_path, n=5)
+    assert rc == 0
+    out = capsys.readouterr().out
+    for i in range(6, 11):   # last 5: entries 006–010
+        assert f"LOG_ENTRY_{i:03d}" in out
+    for i in range(1, 6):    # first 5: entries 001–005
+        assert f"LOG_ENTRY_{i:03d}" not in out
+
+
+def test_logs_no_file(tmp_path, capsys):
+    """run_logs with no log file prints the expected message."""
+    from yohoho.core.cli import run_logs
+
+    rc = run_logs(tmp_path)
+    assert rc == 0
+    assert "(no log file yet)" in capsys.readouterr().out
+
+
+# ---------------------------------------------------------------------------
+# T9: no marker side-effects
+# ---------------------------------------------------------------------------
+
+
+def test_status_history_logs_do_not_write_markers(tmp_path):
+    """None of the three reader commands touch running/clean_shutdown markers."""
+    from yohoho.core.cli import run_status, run_history, run_logs
+
+    run_status(tmp_path, platform=_FakePlatform(ok=True))
+    run_history(tmp_path)
+    run_logs(tmp_path)
 
     assert not (tmp_path / "running").exists()
     assert not (tmp_path / "clean_shutdown").exists()
