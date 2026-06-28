@@ -126,3 +126,21 @@ def test_stop_sentinel_absent_poll_continues(tmp_path):
     runner._poll_signal()
     assert runner._stopped is False
     assert runner._signal_id is not None
+
+
+class _RaisingSentinel:
+    """Sentinel that 'exists' but whose unlink always raises (Windows lock / race)."""
+
+    def exists(self):
+        return True
+
+    def unlink(self, missing_ok=False):
+        raise OSError("simulated lock / unlink failure")
+
+
+def test_stop_sentinel_unlink_error_still_stops():
+    """A failed sentinel unlink must NOT suppress the graceful stop."""
+    runner = _make_runner(stop_sentinel=_RaisingSentinel())
+    runner._poll_signal()
+    # The unlink raised, but stop() still ran — the loop is not left wedged.
+    assert runner._stopped is True

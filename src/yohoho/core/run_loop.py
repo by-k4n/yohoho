@@ -159,9 +159,12 @@ def run_start_loop(data_dir, state_writer=None) -> None:
                     chimes.play_end()  # dictation finished (text inserted) — "off" chime
 
             def _on_status(s) -> None:
-                q.put({"t": "state", "state": s})
+                q.put({"t": "state", "state": s})  # panel first — always safe
                 if state_writer is not None:
-                    state_writer.set(s)
+                    try:
+                        state_writer.set(s)
+                    except OSError:
+                        pass  # status file is observability-only; never break dictation
 
             controller = Controller(
                 engine=engine,
@@ -209,6 +212,7 @@ def run_start_loop(data_dir, state_writer=None) -> None:
     #   launchd bootout (SIGTERM) — now handled gracefully: the signal handler
     #     flips the stop flag; the poll loop stops the runner; `finally` runs.
     stop_sentinel = data_dir / "stop"
+    stop_sentinel.unlink(missing_ok=True)  # clear any stale sentinel from a prior run
     runner = PanelRunner(root, panel, model, q, executor=executor,
                          window_chrome=plat.window_chrome,
                          stop_sentinel=stop_sentinel)

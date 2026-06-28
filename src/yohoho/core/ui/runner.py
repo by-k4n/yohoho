@@ -272,8 +272,13 @@ class PanelRunner:
             self.stop()
             return
         if self._stop_sentinel is not None and self._stop_sentinel.exists():
-            # Remove the sentinel before stopping so a second poll can't re-fire.
-            self._stop_sentinel.unlink()
+            # Remove the sentinel so a second poll can't re-fire, but a failed
+            # unlink (exists()->unlink race / Windows lock) must NEVER suppress the
+            # stop — otherwise ALL graceful-stop paths die and SIGKILL is needed.
+            try:
+                self._stop_sentinel.unlink(missing_ok=True)
+            except OSError:
+                pass
             self.stop()
             return
         self._signal_id = self.root.after(_SIGNAL_POLL_MS, self._poll_signal)
