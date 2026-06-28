@@ -6,7 +6,7 @@ Dispatches subcommands:
   config     — get/set/list/reset config values
   doctor     — show permission status
   setup      — first-run: hotkey + permissions + model download + autostart
-  start      — run the hotkey dictation loop (foreground)
+  start      — run the dictation daemon in the background (detaches from the terminal)
   stop       — stop the background agent
   status / history / logs — stubs (M4)
 
@@ -587,11 +587,6 @@ def run_start(data_dir: Path) -> int:
 
 # ---------------------------------------------------------------------------
 # stop command (Task 12)
-#
-# M3 design decision: `stop` calls MacAutostart.disable() which issues
-# `launchctl bootout` AND removes the plist.  This means `stop` is equivalent
-# to "uninstall autostart + stop the running agent."  Re-run `yohoho setup` to
-# restore autostart.  A more surgical "pause" (bootout but keep plist) is M4.
 # ---------------------------------------------------------------------------
 
 
@@ -603,10 +598,13 @@ def run_stop(data_dir: Path, *, grace_s: float = 5.0) -> int:
     touches login autostart. 'stop + don't relaunch at login' would be a future
     --disable-autostart flag (out of scope)."""
     pidfile = PidFile(data_dir)
-    if not pidfile.is_running():
+    # Capture pid BEFORE the is_running() check: if the daemon exits and releases
+    # the pidfile between the two reads, read_pid() would return None and we'd
+    # print "(pid None)" — or, in the re-acquire case, call terminate(None).
+    pid = pidfile.read_pid()
+    if pid is None or not pidfile.is_running():
         print("yohoho: not running")
         return 0
-    pid = pidfile.read_pid()
     # Graceful: the runner's 200ms poll loop sees this file, removes it, and stops
     # cleanly (the daemon then removes its own pidfile). This is the cross-platform
     # graceful path — a DETACHED_PROCESS Windows child can't receive signals.
@@ -619,8 +617,10 @@ def run_stop(data_dir: Path, *, grace_s: float = 5.0) -> int:
         time.sleep(0.1)
     # Force: the daemon didn't exit in time. Kill it, then clean up the files it
     # couldn't (a force-killed / Windows-detached daemon never runs its finally).
+    # That includes the "running" crash marker — without this a user-initiated
+    # force-stop would leave detect_prior_crash() falsely reporting a crash.
     get_process_controller().terminate(pid, graceful=False)
-    for name in ("yohoho.pid", "stop", "state.json"):
+    for name in ("yohoho.pid", "stop", "state.json", "running"):
         (data_dir / name).unlink(missing_ok=True)
     print(f"yohoho: force-stopped (pid {pid})")
     return 0
@@ -736,7 +736,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     # -- start ----------------------------------------------------------------
-    subparsers.add_parser("start", help="Start the hotkey dictation loop (foreground)")
+    subparsers.add_parser(
+        "start",
+        help="Start the dictation daemon (detaches from the terminal; runs in the background)",
+    )
 
     # -- stop -----------------------------------------------------------------
     subparsers.add_parser("stop", help="Stop the background yohoho agent")

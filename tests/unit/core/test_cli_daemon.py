@@ -17,7 +17,7 @@ def test_start_detaches_when_tty(monkeypatch, tmp_path, capsys):
     monkeypatch.setattr(cli, "get_process_controller", lambda: fake)
     monkeypatch.setattr(cli, "_has_tty", lambda: True)
 
-    run_start(tmp_path)
+    assert run_start(tmp_path) == 0
 
     assert fake.spawned == [["yohoho", "_run-daemon"]]
     out = capsys.readouterr().out
@@ -36,10 +36,17 @@ def test_start_foreground_when_no_tty(monkeypatch, tmp_path):
     monkeypatch.setattr(cli, "run_daemon", fake_run_daemon)
     monkeypatch.setattr(cli, "get_process_controller", lambda: fake)
 
-    run_start(tmp_path)
+    assert run_start(tmp_path) == 0
 
     assert called["fg"] == tmp_path
     assert fake.spawned == []
+
+
+def test_start_foreground_propagates_daemon_exit_code(monkeypatch, tmp_path):
+    monkeypatch.setattr(cli, "_has_tty", lambda: False)
+    monkeypatch.setattr(cli, "run_daemon", lambda dd: 1)
+
+    assert run_start(tmp_path) == 1
 
 
 def test_start_refuses_second_instance(monkeypatch, tmp_path, capsys):
@@ -67,6 +74,31 @@ def test_stop_when_not_running(tmp_path, capsys):
     out = capsys.readouterr().out
     assert "not running" in out
     assert rc == 0
+
+
+def test_stop_pid_none_does_not_terminate(monkeypatch, tmp_path, capsys):
+    """If read_pid() returns None (pidfile gone), treat as not running — never
+    call terminate(None)."""
+
+    class FakePidFile:
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def read_pid(self):
+            return None
+
+        def is_running(self):
+            return False
+
+    fake_ctrl = NullProcessController()
+    monkeypatch.setattr(cli, "PidFile", FakePidFile)
+    monkeypatch.setattr(cli, "get_process_controller", lambda: fake_ctrl)
+
+    rc = run_stop(tmp_path)
+
+    assert rc == 0
+    assert "not running" in capsys.readouterr().out
+    assert fake_ctrl.terminated == []
 
 
 def test_stop_graceful(monkeypatch, tmp_path, capsys):
@@ -128,6 +160,42 @@ def test_stop_force(monkeypatch, tmp_path, capsys):
     out = capsys.readouterr().out
     assert "force-stopped" in out
     assert rc == 0
+
+
+# ---------------------------------------------------------------------------
+# _has_tty tests
+# ---------------------------------------------------------------------------
+
+
+class _FakeStream:
+    def __init__(self, result):
+        # result: True/False to return, or an Exception class/instance to raise.
+        self._result = result
+
+    def isatty(self):
+        if isinstance(self._result, type) and issubclass(self._result, BaseException):
+            raise self._result()
+        if isinstance(self._result, BaseException):
+            raise self._result
+        return self._result
+
+
+def test_has_tty_true_when_both_ttys(monkeypatch):
+    monkeypatch.setattr(cli.sys, "stdin", _FakeStream(True))
+    monkeypatch.setattr(cli.sys, "stdout", _FakeStream(True))
+    assert cli._has_tty() is True
+
+
+def test_has_tty_false_when_stdin_none(monkeypatch):
+    monkeypatch.setattr(cli.sys, "stdin", None)
+    monkeypatch.setattr(cli.sys, "stdout", _FakeStream(True))
+    assert cli._has_tty() is False
+
+
+def test_has_tty_false_when_isatty_raises(monkeypatch):
+    monkeypatch.setattr(cli.sys, "stdin", _FakeStream(ValueError))
+    monkeypatch.setattr(cli.sys, "stdout", _FakeStream(True))
+    assert cli._has_tty() is False
 
 
 # ---------------------------------------------------------------------------
