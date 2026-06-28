@@ -1,5 +1,6 @@
 import json
 import os
+from pathlib import Path
 from yohoho.core.daemon import PidFile, StateWriter, EXIT_ALREADY_RUNNING, run_daemon
 from yohoho.core.observability import detect_prior_crash
 
@@ -82,12 +83,16 @@ def test_run_daemon_acquires_and_releases(tmp_path, monkeypatch):
 
     def fake_loop(data_dir, state_writer=None, record_error=None):
         seen["pid_running"] = PidFile(data_dir).is_running()
+        state_writer.set("idle")
+        seen["state_mid"] = (Path(data_dir) / "state.json").exists()
 
     monkeypatch.setattr("yohoho.core.run_loop.run_start_loop", fake_loop)
     result = run_daemon(tmp_path)
     assert result == 0
     assert seen.get("pid_running") is True, "pidfile should be live DURING loop"
+    assert seen.get("state_mid") is True, "state.json should exist DURING loop"
     assert PidFile(tmp_path).is_running() is False, "pidfile should be released AFTER run"
+    # Meaningful now that state.json existed mid-loop: clear() must have removed it.
     assert not (tmp_path / "state.json").exists(), "state.json should be cleared AFTER run"
 
 

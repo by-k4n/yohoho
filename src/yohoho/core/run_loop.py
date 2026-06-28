@@ -216,7 +216,7 @@ def run_start_loop(data_dir, state_writer=None, record_error=None) -> None:
             # Persist the last error so `yohoho status` can surface it later.
             if record_error is not None:
                 try:
-                    record_error("model", f"startup failed: {exc}")
+                    record_error(ErrorCode.MODEL.value, f"startup failed: {exc}")
                 except Exception:  # noqa: BLE001
                     pass  # observability is best-effort; never break the flow
 

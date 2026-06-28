@@ -120,7 +120,7 @@ def _utc_now_iso() -> str:
 # ---------------------------------------------------------------------------
 
 
-def run_daemon(data_dir, *, now: "Callable[[], str] | None" = None) -> int:
+def run_daemon(data_dir, *, now: Callable[[], str] | None = None) -> int:
     """Acquire the pidfile, run the main loop, and clean up on exit.
 
     This is the single entry point the hidden ``_run-daemon`` CLI subcommand
@@ -160,7 +160,13 @@ def run_daemon(data_dir, *, now: "Callable[[], str] | None" = None) -> int:
         from yohoho.core.run_loop import run_start_loop  # noqa: PLC0415
         run_start_loop(data_dir, state_writer=state, record_error=rec)
     finally:
-        mark_clean_shutdown(data_dir)
+        # Fully fault-tolerant: pidfile.release() must ALWAYS run last, even if the
+        # disk is full (ENOSPC) when writing the clean-shutdown marker — otherwise
+        # the pidfile would leak and block the next start.
+        try:
+            mark_clean_shutdown(data_dir)
+        except OSError:
+            pass
         if state is not None:
             try:
                 state.clear()
