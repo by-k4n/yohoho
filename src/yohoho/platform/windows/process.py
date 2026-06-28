@@ -16,8 +16,6 @@ from yohoho.core.config import data_dir
 
 # Windows process-access right constants inlined here so win32con is not needed at module top.
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-_PROCESS_TERMINATE = 0x0001
-_STILL_ACTIVE = 259  # GetExitCodeProcess returns this value while the process is still running
 _ERROR_ACCESS_DENIED = 5   # OpenProcess fails with this → process exists, we lack rights → alive
 _ERROR_INVALID_PARAMETER = 87  # OpenProcess fails with this → no such process → dead
 
@@ -68,9 +66,13 @@ class WindowsProcessController:
     def is_alive(self, pid: int) -> bool:
         """Return True if *pid* refers to a currently-running Windows process.
 
-        Uses OpenProcess + GetExitCodeProcess so it works for processes owned by other users
-        (as long as PROCESS_QUERY_LIMITED_INFORMATION is granted, which is usually available
-        even across session boundaries).
+        Uses OpenProcess + WaitForSingleObject(h, 0) so it works for processes owned by other
+        users (as long as PROCESS_QUERY_LIMITED_INFORMATION is granted, which is usually
+        available even across session boundaries).  WaitForSingleObject avoids the classic
+        GetExitCodeProcess footgun: a process that legitimately exits with code 259 is
+        indistinguishable from STILL_ACTIVE (also 259).  Waiting on the process handle is
+        unambiguous: WAIT_TIMEOUT → the handle is unsignaled → still running;
+        WAIT_OBJECT_0 → the handle is signaled → the process has exited.
 
         Edge cases:
         - ERROR_ACCESS_DENIED   → process exists but we lack rights → treat as alive.
@@ -81,7 +83,7 @@ class WindowsProcessController:
             return False
         try:
             import win32api
-            import win32process
+            import win32event
         except ImportError:
             # pywin32 not installed (e.g. running on macOS in test collection) — unknown.
             return False
@@ -94,8 +96,7 @@ class WindowsProcessController:
                 return True  # process exists; we just can't open it
             return False
         try:
-            code = win32process.GetExitCodeProcess(h)
-            return code == _STILL_ACTIVE
+            return win32event.WaitForSingleObject(h, 0) == win32event.WAIT_TIMEOUT
         except Exception:  # noqa: BLE001
             return False
         finally:
@@ -116,11 +117,21 @@ class WindowsProcessController:
         The method is a no-op if the process is already dead and does not raise if the process
         vanishes between the liveness check and the kill attempt (race-condition safe).
 
-        # TODO(windows-verify): CTRL_BREAK_EVENT targeting a pythonw.exe process
-        # (GUI-subsystem, no console) may not be delivered reliably because console control
-        # events are routed through the console host.  Verify on the Windows box.  The
-        # runner-side SIGBREAK handler is Task 6.  If CTRL_BREAK proves unreliable, the
-        # deferred fallback is a Win32 named event the runner polls (Task 7).
+        IMPORTANT — this is the force-escalation fallback, NOT the primary graceful stop.
+        Because ``spawn_detached`` creates the daemon with ``DETACHED_PROCESS``, the child has
+        NO console attached, so ``GenerateConsoleCtrlEvent(CTRL_BREAK_EVENT, ...)`` has nothing
+        to deliver the event through — the call effectively no-ops, the ~5 s poll elapses, and
+        ``TerminateProcess`` hard-kills the process.  That means the runner's clean-shutdown
+        path is SKIPPED here.  The ACTUAL cross-platform graceful path is a **stop-sentinel
+        file** that the daemon's run loop polls (written by the ``stop`` command / daemon body);
+        the runner notices the sentinel and exits cleanly on its own.  ``terminate()`` exists
+        only to force-escalate when that cooperative shutdown does not happen in time.
+
+        # TODO(windows-verify): Confirm on the Windows box that (a) the stop-sentinel file is
+        # the path that actually achieves a clean shutdown, and (b) CTRL_BREAK_EVENT does NOT
+        # reach the consoleless DETACHED_PROCESS daemon (so the 5 s poll + TerminateProcess
+        # fallback is what stops it).  If a graceful Win32 signal is ever needed directly, the
+        # deferred option is a named event the runner polls (Task 7).
         """
         if not self.is_alive(pid):
             return
@@ -142,8 +153,9 @@ class WindowsProcessController:
                 pass  # vanished-process race → termination already succeeded
             return
 
-        # Graceful: signal via CTRL_BREAK first; the runner (Task 6) should catch SIGBREAK and
-        # initiate a clean shutdown.  Then wait up to 5 s before forcing termination.
+        # Graceful: best-effort CTRL_BREAK first (expected to no-op for a consoleless
+        # DETACHED_PROCESS daemon — see the docstring; clean shutdown is driven by the
+        # stop-sentinel file, not this signal).  Then wait up to 5 s before forcing termination.
         try:
             win32console.GenerateConsoleCtrlEvent(win32con.CTRL_BREAK_EVENT, pid)
         except Exception:  # noqa: BLE001 — race: process may have exited already
