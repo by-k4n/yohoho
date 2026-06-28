@@ -343,19 +343,10 @@ def test_run_setup_rejects_invalid_hotkey(capsys, tmp_path):
     assert autostart_enabled["called"] is False
 
 
-def test_run_stop_calls_disable(tmp_path):
-    """run_stop calls autostart.disable() via the injected platform."""
+def test_run_stop_when_not_running(tmp_path, capsys):
+    """run_stop prints 'not running' when no daemon is running (no autostart touched)."""
     from yohoho.core.cli import run_stop
 
-    disabled = {"called": False}
-
-    class FakeAutostart:
-        def enable(self): pass
-        def disable(self): disabled["called"] = True
-        def is_enabled(self): return True
-
-    class FakePlatform:
-        autostart = FakeAutostart()
-
-    run_stop(tmp_path, platform=FakePlatform())
-    assert disabled["called"] is True
+    rc = run_stop(tmp_path)
+    assert rc == 0
+    assert "not running" in capsys.readouterr().out

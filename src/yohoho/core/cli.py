@@ -32,12 +32,12 @@ from yohoho.core.engine import ParakeetEngine
 from yohoho.core.events import ErrorCode, Terminal
 from yohoho.core.history import HistoryStore
 from yohoho.core.null_platform import make_null_platform
+from yohoho.core.daemon import PidFile, run_daemon
 from yohoho.core.observability import (
     install_crash_net,
-    mark_clean_shutdown,
-    mark_running,
     setup_logging,
 )
+from yohoho.core.platform_factory import get_process_controller
 from yohoho.core.recorder import Recorder
 
 _log = logging.getLogger("yohoho.cli")
@@ -52,6 +52,21 @@ def _make_engine(data_dir: Path) -> ParakeetEngine:
     """Return a ParakeetEngine rooted in *data_dir*.  Replaced by tests."""
     return ParakeetEngine(data_dir=data_dir)
 
+
+def _has_tty() -> bool:
+    """True only if BOTH stdin and stdout are real interactive terminals.
+    None-guarded: pythonw (Windows) and detached children set these to None, so
+    a bare sys.stdout.isatty() would crash — that's the whole point of the rule."""
+    for stream in (sys.stdin, sys.stdout):
+        isatty = getattr(stream, "isatty", None)
+        if not callable(isatty):
+            return False
+        try:
+            if not isatty():
+                return False
+        except (ValueError, OSError):
+            return False
+    return True
 
 
 def _capture_seconds(
@@ -556,10 +571,18 @@ def run_setup(
 # ---------------------------------------------------------------------------
 
 
-def run_start(data_dir: Path) -> None:
-    """Start the hotkey dictation loop (foreground — Tk panel + real bundle)."""
-    from yohoho.core.run_loop import run_start_loop
-    run_start_loop(data_dir)
+def run_start(data_dir: Path) -> int:
+    """Start the daemon: detach from an interactive terminal, else run foreground."""
+    pidfile = PidFile(data_dir)
+    if pidfile.is_running():
+        print(f"yohoho: already running (pid {pidfile.read_pid()})")
+        return 0
+    if _has_tty():
+        pid = get_process_controller().spawn_detached(["yohoho", "_run-daemon"])
+        print(f"yohoho: started (pid {pid})")
+        return 0
+    # No interactive terminal (launchd / pythonw): run the daemon in the foreground.
+    return run_daemon(data_dir)
 
 
 # ---------------------------------------------------------------------------
@@ -572,12 +595,35 @@ def run_start(data_dir: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
-def run_stop(data_dir: Path, platform=None) -> None:
-    """Stop the background yohoho agent via launchctl bootout."""
-    from yohoho.core.platform_factory import get_platform
-    platform = platform or get_platform()
-    platform.autostart.disable()
-    print("yohoho: stopped (autostart removed). Run `yohoho setup` to re-enable.", file=sys.stderr)
+def run_stop(data_dir: Path, *, grace_s: float = 5.0) -> int:
+    """Stop the running daemon. Graceful first (write the stop-sentinel the runner
+    polls); if it doesn't exit within grace_s, force-terminate and clean up.
+
+    NOTE (behavior change from M3): stop controls the PROCESS only — it no longer
+    touches login autostart. 'stop + don't relaunch at login' would be a future
+    --disable-autostart flag (out of scope)."""
+    pidfile = PidFile(data_dir)
+    if not pidfile.is_running():
+        print("yohoho: not running")
+        return 0
+    pid = pidfile.read_pid()
+    # Graceful: the runner's 200ms poll loop sees this file, removes it, and stops
+    # cleanly (the daemon then removes its own pidfile). This is the cross-platform
+    # graceful path — a DETACHED_PROCESS Windows child can't receive signals.
+    (data_dir / "stop").write_text("1", encoding="utf-8")
+    deadline = time.monotonic() + grace_s
+    while time.monotonic() < deadline:
+        if not pidfile.is_running():
+            print(f"yohoho: stopped (pid {pid})")
+            return 0
+        time.sleep(0.1)
+    # Force: the daemon didn't exit in time. Kill it, then clean up the files it
+    # couldn't (a force-killed / Windows-detached daemon never runs its finally).
+    get_process_controller().terminate(pid, graceful=False)
+    for name in ("yohoho.pid", "stop", "state.json"):
+        (data_dir / name).unlink(missing_ok=True)
+    print(f"yohoho: force-stopped (pid {pid})")
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -695,6 +741,9 @@ def build_parser() -> argparse.ArgumentParser:
     # -- stop -----------------------------------------------------------------
     subparsers.add_parser("stop", help="Stop the background yohoho agent")
 
+    # -- _run-daemon (hidden: invoked by the detached child process) ----------
+    subparsers.add_parser("_run-daemon", help=argparse.SUPPRESS)
+
     # -- stubs ----------------------------------------------------------------
     for cmd in _STUB_CMDS:
         subparsers.add_parser(cmd, help=f"{cmd}: not yet implemented (M4)")
@@ -724,30 +773,28 @@ def main(argv=None) -> int:  # noqa: ANN001
     verbose = getattr(args, "verbose", False)
     logger = setup_logging(dd, level="debug" if verbose else "info")
     install_crash_net(dd, logger)
-    mark_running(dd)
 
-    try:
-        if args.cmd == "dictate":
-            run_dictate(args.seconds, args.device, dd, save=args.save, no_panel=args.no_panel)
-        elif args.cmd == "panel-demo":
-            run_panel_demo(args.cycle, args.state, args.seconds)
-        elif args.cmd == "config":
-            run_config(args, dd)
-        elif args.cmd == "doctor":
-            run_doctor(dd)
-        elif args.cmd == "setup":
-            run_setup(dd, args=args)
-        elif args.cmd == "start":
-            run_start(dd)
-        elif args.cmd == "stop":
-            run_stop(dd)
-        elif args.cmd in _STUB_CMDS:
-            print(f"{args.cmd}: not yet implemented (M4)")
-        else:
-            parser.print_help()
-            return 2
-    finally:
-        mark_clean_shutdown(dd)
+    if args.cmd == "dictate":
+        run_dictate(args.seconds, args.device, dd, save=args.save, no_panel=args.no_panel)
+    elif args.cmd == "panel-demo":
+        run_panel_demo(args.cycle, args.state, args.seconds)
+    elif args.cmd == "config":
+        run_config(args, dd)
+    elif args.cmd == "doctor":
+        run_doctor(dd)
+    elif args.cmd == "setup":
+        run_setup(dd, args=args)
+    elif args.cmd == "_run-daemon":
+        return run_daemon(dd)
+    elif args.cmd == "start":
+        return run_start(dd)
+    elif args.cmd == "stop":
+        return run_stop(dd)
+    elif args.cmd in _STUB_CMDS:
+        print(f"{args.cmd}: not yet implemented (M4)")
+    else:
+        parser.print_help()
+        return 2
 
     return 0
 
