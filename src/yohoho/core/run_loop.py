@@ -64,7 +64,7 @@ def handle_activation(controller, recorder, put, chimes=None) -> None:
     # would re-feed the recorder and paste the same transcript twice.
 
 
-def run_start_loop(data_dir, state_writer=None) -> None:
+def run_start_loop(data_dir, state_writer=None, record_error=None) -> None:
     """Wire the panel (main thread) + hotkey listener + controller (real bundle) + recorder.
 
     Reuses the M2 inverted run-structure: Tk mainloop owns the main thread; a
@@ -157,6 +157,12 @@ def run_start_loop(data_dir, state_writer=None) -> None:
                 q.put({"t": "terminal", "kind": e.kind, "code": e.code})
                 if e.kind is Terminal.DONE:
                     chimes.play_end()  # dictation finished (text inserted) — "off" chime
+                elif e.kind is Terminal.ERROR and record_error is not None:
+                    try:
+                        code_str = e.code.value if e.code is not None else "UNKNOWN"
+                        record_error(code_str, f"terminal error: {code_str}")
+                    except Exception:  # noqa: BLE001
+                        pass  # observability is best-effort; never break the flow
 
             def _on_status(s) -> None:
                 q.put({"t": "state", "state": s})  # panel first — always safe
@@ -190,7 +196,7 @@ def run_start_loop(data_dir, state_writer=None) -> None:
                 f"yohoho is ready. Press {hk_display} to start/stop dictation  ·  Ctrl-C to quit.",
                 flush=True,
             )
-        except Exception:
+        except Exception as exc:
             # NOTE: on a worker (engine-load) failure no listener is armed.  The panel
             # shows ERROR, hides, and the runner stays alive.  Ctrl+C (the SIGINT poller)
             # is the only exit at this point; a supervisor-level retry is deferred to M4.
@@ -201,6 +207,18 @@ def run_start_loop(data_dir, state_writer=None) -> None:
                 flush=True,
             )
             q.put({"t": "terminal", "kind": Terminal.ERROR, "code": ErrorCode.MODEL})
+            # Flip state to "error" so `yohoho status` doesn't stay stuck at "loading".
+            if state_writer is not None:
+                try:
+                    state_writer.set("error")
+                except OSError:
+                    pass
+            # Persist the last error so `yohoho status` can surface it later.
+            if record_error is not None:
+                try:
+                    record_error("model", f"startup failed: {exc}")
+                except Exception:  # noqa: BLE001
+                    pass  # observability is best-effort; never break the flow
 
     # The start loop is PERSISTENT: after each dictation the panel hides and the
     # listener stays armed for the NEXT hotkey press.  on_done is left at its

@@ -9,6 +9,9 @@ from pathlib import Path
 
 _PID_NAME = "yohoho.pid"
 
+# Exit codes for run_daemon's return value (used by the _run-daemon CLI subcommand).
+EXIT_ALREADY_RUNNING = 1
+
 
 def pid_alive(pid: int) -> bool:
     """True if a process with this pid exists. POSIX impl; Windows overrides via
@@ -100,3 +103,69 @@ class StateWriter:
             self._path.unlink()
         except FileNotFoundError:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Timestamp helper (mirrors observability._utc_now_iso for consistent format)
+# ---------------------------------------------------------------------------
+
+
+def _utc_now_iso() -> str:
+    import time
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+# ---------------------------------------------------------------------------
+# Daemon body
+# ---------------------------------------------------------------------------
+
+
+def run_daemon(data_dir, *, now: "Callable[[], str] | None" = None) -> int:
+    """Acquire the pidfile, run the main loop, and clean up on exit.
+
+    This is the single entry point the hidden ``_run-daemon`` CLI subcommand
+    (T8) and the future signed ``.app`` both call.
+
+    Returns:
+        0              — clean run and exit.
+        EXIT_ALREADY_RUNNING — a live instance already holds the pidfile;
+                         the loop is NOT called and no markers are touched.
+    """
+    if now is None:
+        now = _utc_now_iso
+
+    data_dir = Path(data_dir)
+    pidfile = PidFile(data_dir)
+    if not pidfile.acquire():
+        # Do NOT enter the try/finally — never release someone else's pidfile.
+        return EXIT_ALREADY_RUNNING
+
+    # Lazy imports keep daemon.py module-level imports cheap (no Tk, no heavy deps).
+    from yohoho.core.observability import (  # noqa: PLC0415
+        mark_running,
+        mark_clean_shutdown,
+        record_error as _record_error,
+    )
+    from yohoho.core.config import load_config  # noqa: PLC0415
+
+    state: StateWriter | None = None
+    try:
+        mark_running(data_dir)
+        cfg = load_config(data_dir / "config.yaml")
+        state = StateWriter(data_dir, hotkey=cfg.hotkey, started_at=now())
+        # Build a bound record_error callback for the loop's error hooks.
+        def rec(code: str, message: str) -> None:
+            _record_error(data_dir, code=code, message=message)
+
+        from yohoho.core.run_loop import run_start_loop  # noqa: PLC0415
+        run_start_loop(data_dir, state_writer=state, record_error=rec)
+    finally:
+        mark_clean_shutdown(data_dir)
+        if state is not None:
+            try:
+                state.clear()
+            except OSError:
+                pass
+        pidfile.release()
+
+    return 0

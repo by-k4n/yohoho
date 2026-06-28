@@ -1,6 +1,7 @@
 import json
 import os
-from yohoho.core.daemon import PidFile, StateWriter
+from yohoho.core.daemon import PidFile, StateWriter, EXIT_ALREADY_RUNNING, run_daemon
+from yohoho.core.observability import detect_prior_crash
 
 def test_acquire_writes_own_pid(tmp_path):
     pf = PidFile(tmp_path)
@@ -68,3 +69,74 @@ def test_state_writer_clear_removes_file(tmp_path):
     sw.set("idle")
     sw.clear()
     assert not (tmp_path / "state.json").exists()
+
+
+# ---------------------------------------------------------------------------
+# run_daemon lifecycle tests (T7)
+# ---------------------------------------------------------------------------
+
+
+def test_run_daemon_acquires_and_releases(tmp_path, monkeypatch):
+    """Pidfile is held during the loop body and released cleanly after run_daemon returns."""
+    seen = {}
+
+    def fake_loop(data_dir, state_writer=None, record_error=None):
+        seen["pid_running"] = PidFile(data_dir).is_running()
+
+    monkeypatch.setattr("yohoho.core.run_loop.run_start_loop", fake_loop)
+    result = run_daemon(tmp_path)
+    assert result == 0
+    assert seen.get("pid_running") is True, "pidfile should be live DURING loop"
+    assert PidFile(tmp_path).is_running() is False, "pidfile should be released AFTER run"
+    assert not (tmp_path / "state.json").exists(), "state.json should be cleared AFTER run"
+
+
+def test_run_daemon_refuses_when_live_instance_held(tmp_path, monkeypatch):
+    """Returns EXIT_ALREADY_RUNNING without calling the loop when another instance is live."""
+    holder = PidFile(tmp_path)
+    assert holder.acquire() is True  # simulate a live process holding the pidfile
+
+    loop_called = []
+
+    def fake_loop(data_dir, state_writer=None, record_error=None):
+        loop_called.append(True)
+
+    monkeypatch.setattr("yohoho.core.run_loop.run_start_loop", fake_loop)
+    result = run_daemon(tmp_path)
+    assert result == EXIT_ALREADY_RUNNING
+    assert not loop_called, "loop must NOT be called when already running"
+    # The holder's pidfile must be untouched
+    assert PidFile(tmp_path).read_pid() == os.getpid()
+
+
+def test_run_daemon_writes_and_clears_markers(tmp_path, monkeypatch):
+    """Running marker exists mid-loop; detect_prior_crash is False after clean exit."""
+    running_marker = tmp_path / "running"
+    captured = {}
+
+    def fake_loop(data_dir, state_writer=None, record_error=None):
+        captured["running_mid"] = running_marker.exists()
+
+    monkeypatch.setattr("yohoho.core.run_loop.run_start_loop", fake_loop)
+    run_daemon(tmp_path)
+    assert captured.get("running_mid") is True, "'running' marker must exist during loop"
+    assert detect_prior_crash(tmp_path) is False, "clean_shutdown must be written; no prior crash"
+
+
+def test_run_daemon_started_at_injectable(tmp_path, monkeypatch):
+    """Injected 'now' appears in state.json; hotkey matches config defaults."""
+    captured = {}
+
+    def fake_loop(data_dir, state_writer=None, record_error=None):
+        # StateWriter only writes on .set(); trigger a write so we can read it back.
+        if state_writer is not None:
+            state_writer.set("idle")
+            state_json = data_dir / "state.json"
+            captured["state"] = json.loads(state_json.read_text())
+
+    monkeypatch.setattr("yohoho.core.run_loop.run_start_loop", fake_loop)
+    run_daemon(tmp_path, now=lambda: "2026-06-28T00:00:00Z")
+    state = captured.get("state", {})
+    assert state.get("started_at") == "2026-06-28T00:00:00Z"
+    # No config.yaml in tmp_path → load_config returns defaults → hotkey = "ctrl+alt+space"
+    assert state.get("hotkey") == "ctrl+alt+space"
