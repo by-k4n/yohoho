@@ -12,11 +12,18 @@ import signal
 import subprocess
 import sys
 import time
-import pty
 
 import pytest
 
 pytestmark = pytest.mark.integration
+
+# `pty` is POSIX-only (it imports termios). This lifecycle test is macOS-first anyway, but the default
+# `-m 'not integration'` deselect happens AFTER collection — so a module-level POSIX import would crash
+# the ENTIRE Windows test run at collection time. Skip the module on Windows before importing pty.
+if sys.platform == "win32":
+    pytest.skip("daemon-lifecycle integration is POSIX/macOS-only (uses pty)", allow_module_level=True)
+
+import pty  # noqa: E402
 
 
 @pytest.mark.skipif(sys.platform != "darwin", reason="daemon lifecycle integration is macOS-first")
