@@ -1,7 +1,8 @@
 import json
 import os
+import sys
 from pathlib import Path
-from yohoho.core.daemon import PidFile, StateWriter, EXIT_ALREADY_RUNNING, run_daemon
+from yohoho.core.daemon import PidFile, StateWriter, EXIT_ALREADY_RUNNING, run_daemon, _default_alive
 from yohoho.core.observability import detect_prior_crash
 
 def test_acquire_writes_own_pid(tmp_path):
@@ -145,3 +146,34 @@ def test_run_daemon_started_at_injectable(tmp_path, monkeypatch):
     assert state.get("started_at") == "2026-06-28T00:00:00Z"
     # No config.yaml in tmp_path → load_config returns defaults → hotkey = "ctrl+alt+space"
     assert state.get("hotkey") == "ctrl+alt+space"
+
+
+# --- PidFile default liveness routing (0.2.1 Windows fix) ----------------------
+# Guards the headline fix: os.kill(pid, 0) is NOT a valid liveness probe on Windows
+# (raises OSError WinError 87 for a dead pid), so _default_alive must route win32
+# through the ProcessController seam while POSIX keeps the os.kill probe.
+
+def test_default_alive_posix_uses_os_kill(monkeypatch):
+    """POSIX (macOS/Linux): _default_alive probes via os.kill (pid_alive), unchanged."""
+    monkeypatch.setattr(sys, "platform", "darwin")
+    assert _default_alive(os.getpid()) is True
+    assert _default_alive(999999) is False
+
+
+def test_default_alive_windows_routes_through_process_controller(monkeypatch):
+    """win32: _default_alive must NOT use os.kill — it routes through
+    get_process_controller().is_alive (the seam that actually works on Windows)."""
+    monkeypatch.setattr(sys, "platform", "win32")
+    seen = {}
+
+    class _FakeController:
+        def is_alive(self, pid):
+            seen["pid"] = pid
+            return True
+
+    monkeypatch.setattr(
+        "yohoho.core.platform_factory.get_process_controller",
+        lambda: _FakeController(),
+    )
+    assert _default_alive(4242) is True
+    assert seen["pid"] == 4242
