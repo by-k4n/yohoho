@@ -45,6 +45,26 @@ from yohoho.core.recorder import Recorder
 _log = logging.getLogger("yohoho.cli")
 
 
+def _ensure_utf8_stdio(streams=None, *, platform: str = sys.platform) -> None:
+    """On Windows, force stdout/stderr to UTF-8 so the CLI's Unicode output can't garble or crash.
+
+    Python defaults console-redirected stdio to the ANSI code page (e.g. cp1252), which can't encode
+    the glyphs the CLI prints: `·`/`—`/`…` come out as mojibake when piped, and `→` (U+2192, absent
+    from cp1252) raises UnicodeEncodeError outright — which crashed `config set`/`config reset`. UTF-8
+    encodes them all; `errors="replace"` is a final guard so output can never crash a command. No-op on
+    macOS/Linux (already UTF-8) and on any stream lacking `.reconfigure` (already-wrapped pipe)."""
+    if platform != "win32":
+        return
+    for stream in (sys.stdout, sys.stderr) if streams is None else streams:
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is None:
+            continue
+        try:
+            reconfigure(encoding="utf-8", errors="replace")
+        except (ValueError, OSError):  # stream detached/closed — best-effort
+            pass
+
+
 # ---------------------------------------------------------------------------
 # Thin seams (monkeypatched in tests)
 # ---------------------------------------------------------------------------
@@ -1034,6 +1054,7 @@ def main(argv=None) -> int:  # noqa: ANN001
     Returns an integer exit code (0 = success, 2 = no command given).
     Declared as the ``yohoho`` console_scripts entry point in pyproject.toml.
     """
+    _ensure_utf8_stdio()  # Windows: emit UTF-8 so `→`/`·`/`—`/`…` neither crash nor garble the CLI.
     parser = build_parser()
     args = parser.parse_args(argv)
 

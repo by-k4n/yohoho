@@ -1,6 +1,34 @@
+import io
+
 from tests.helpers import _one_second_loud_16k, _silence_16k
-from yohoho.core.cli import build_parser, run_dictate
+from yohoho.core.cli import _ensure_utf8_stdio, build_parser, run_dictate
 from yohoho.core.platform_api import Permission, PermissionStatus
+
+
+def test_ensure_utf8_stdio_reconfigures_cp1252_on_windows():
+    """On Windows the cp1252 console encoding can't encode `→` (U+2192) — the helper switches the
+    streams to UTF-8 so output neither crashes (config set/reset) nor garbles (doctor/history)."""
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    assert stream.encoding == "cp1252"
+    _ensure_utf8_stdio([stream], platform="win32")
+    assert stream.encoding == "utf-8"
+    stream.write("a → b · c — d …")  # would raise UnicodeEncodeError under cp1252; must not now
+    stream.flush()
+    assert "→" in stream.buffer.getvalue().decode("utf-8")
+
+
+def test_ensure_utf8_stdio_is_noop_off_windows():
+    """macOS/Linux already use UTF-8 — the helper must not touch their stdio."""
+    stream = io.TextIOWrapper(io.BytesIO(), encoding="cp1252")
+    _ensure_utf8_stdio([stream], platform="darwin")
+    assert stream.encoding == "cp1252"  # untouched
+
+
+def test_ensure_utf8_stdio_tolerates_streams_without_reconfigure():
+    class _Bare:
+        pass
+
+    _ensure_utf8_stdio([_Bare()], platform="win32")  # must not raise
 
 
 def test_parser_has_dictate():
