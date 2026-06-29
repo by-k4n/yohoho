@@ -193,6 +193,17 @@ class ParakeetEngine:
 
         self._loaded = True
 
+        # Record that the model is present so `status` reports it ("model: ready") and subsequent
+        # loads can skip the network revision-check via HF_HUB_OFFLINE (set above when this marker
+        # exists). The marker was previously read but never written, so status always under-reported
+        # the model and offline mode never activated. Best-effort: the marker is an optimization,
+        # never load-critical, so a write failure must not break a successful load.
+        if self._data_dir is not None:
+            try:
+                (self._data_dir / "model_ready").touch()
+            except OSError:
+                pass
+
     def recognize(self, audio: bytes | np.ndarray, sample_rate: int) -> str:
         """Transcribe *audio* and return the recognised text.
 

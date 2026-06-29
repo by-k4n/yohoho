@@ -32,3 +32,25 @@ def test_fake_engine_raise_on_load():
     e = FakeEngine(result="x", raise_on_load=True)
     with pytest.raises(EngineLoadError):
         e.load()
+
+
+def test_parakeet_load_writes_model_ready_marker(tmp_path, monkeypatch):
+    """A successful load() must create the model_ready marker so `status` reports the model and
+    later loads can enable HF_HUB_OFFLINE. Regression: the marker was read but never written."""
+    import sys
+    import types
+
+    from yohoho.core.engine import ParakeetEngine
+
+    # Isolate the HF_* env (load() assigns os.environ directly) and stub the heavy onnx_asr import
+    # so no model is downloaded.
+    monkeypatch.setenv("HF_HOME", "")
+    monkeypatch.delenv("HF_HUB_OFFLINE", raising=False)
+    monkeypatch.setitem(
+        sys.modules, "onnx_asr", types.SimpleNamespace(load_model=lambda *a, **k: object())
+    )
+
+    eng = ParakeetEngine(data_dir=tmp_path)
+    assert not (tmp_path / "model_ready").exists()
+    eng.load()
+    assert (tmp_path / "model_ready").exists(), "load() must mark the model ready"

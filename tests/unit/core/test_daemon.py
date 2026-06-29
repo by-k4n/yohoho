@@ -2,6 +2,9 @@ import json
 import os
 import sys
 from pathlib import Path
+
+import pytest
+
 from yohoho.core.daemon import PidFile, StateWriter, EXIT_ALREADY_RUNNING, run_daemon, _default_alive
 from yohoho.core.observability import detect_prior_crash
 
@@ -153,6 +156,12 @@ def test_run_daemon_started_at_injectable(tmp_path, monkeypatch):
 # (raises OSError WinError 87 for a dead pid), so _default_alive must route win32
 # through the ProcessController seam while POSIX keeps the os.kill probe.
 
+@pytest.mark.skipif(
+    sys.platform == "win32",
+    reason="exercises the POSIX os.kill liveness path; os.kill(dead_pid, 0) raises WinError 87 on the "
+    "real Windows kernel regardless of a monkeypatched sys.platform. The win32 routing is covered by "
+    "test_default_alive_windows_routes_through_process_controller.",
+)
 def test_default_alive_posix_uses_os_kill(monkeypatch):
     """POSIX (macOS/Linux): _default_alive probes via os.kill (pid_alive), unchanged."""
     monkeypatch.setattr(sys, "platform", "darwin")
