@@ -16,6 +16,8 @@ from yohoho.core.config import data_dir
 
 # Windows process-access right constants inlined here so win32con is not needed at module top.
 _PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+_SYNCHRONIZE = 0x00100000  # REQUIRED to WaitForSingleObject on the process handle (QUERY_LIMITED alone
+                           # opens the handle but the wait then fails with ERROR_ACCESS_DENIED).
 _ERROR_ACCESS_DENIED = 5   # OpenProcess fails with this → process exists, we lack rights → alive
 _ERROR_INVALID_PARAMETER = 87  # OpenProcess fails with this → no such process → dead
 
@@ -66,9 +68,10 @@ class WindowsProcessController:
     def is_alive(self, pid: int) -> bool:
         """Return True if *pid* refers to a currently-running Windows process.
 
-        Uses OpenProcess + WaitForSingleObject(h, 0) so it works for processes owned by other
-        users (as long as PROCESS_QUERY_LIMITED_INFORMATION is granted, which is usually
-        available even across session boundaries).  WaitForSingleObject avoids the classic
+        Uses OpenProcess(QUERY_LIMITED_INFORMATION | SYNCHRONIZE) + WaitForSingleObject(h, 0).
+        SYNCHRONIZE is mandatory: without it OpenProcess still succeeds but the wait fails with
+        ERROR_ACCESS_DENIED, which previously made is_alive() return False for EVERY pid (incl.
+        live ones) — silently breaking status/start/stop.  WaitForSingleObject avoids the classic
         GetExitCodeProcess footgun: a process that legitimately exits with code 259 is
         indistinguishable from STILL_ACTIVE (also 259).  Waiting on the process handle is
         unambiguous: WAIT_TIMEOUT → the handle is unsignaled → still running;
@@ -88,7 +91,7 @@ class WindowsProcessController:
             # pywin32 not installed (e.g. running on macOS in test collection) — unknown.
             return False
         try:
-            h = win32api.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+            h = win32api.OpenProcess(_PROCESS_QUERY_LIMITED_INFORMATION | _SYNCHRONIZE, False, pid)
         except win32api.error as exc:
             if exc.winerror == _ERROR_INVALID_PARAMETER:
                 return False  # no such process

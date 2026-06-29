@@ -3,6 +3,7 @@ daemon body run_daemon() — the single entry the future signed .app also calls.
 from __future__ import annotations
 import json
 import os
+import sys
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -14,8 +15,10 @@ EXIT_ALREADY_RUNNING = 1
 
 
 def pid_alive(pid: int) -> bool:
-    """True if a process with this pid exists. POSIX impl; Windows overrides via
-    WindowsProcessController.is_alive (see platform/windows/process.py)."""
+    """True if a process with this pid exists. POSIX impl (macOS/Linux). NOT valid on Windows:
+    os.kill(pid, 0) there raises OSError(WinError 87) for a *dead* pid instead of
+    ProcessLookupError, so callers on Windows must use the ProcessController seam — see
+    _default_alive, which routes Windows liveness through WindowsProcessController.is_alive."""
     if pid <= 0:
         return False
     try:
@@ -27,8 +30,24 @@ def pid_alive(pid: int) -> bool:
     return True
 
 
+def _default_alive(pid: int) -> bool:
+    """Cross-platform liveness used as PidFile's default `alive` callback.
+
+    POSIX (macOS/Linux) → pid_alive (os.kill probe). Windows → WindowsProcessController.is_alive
+    (OpenProcess + WaitForSingleObject) via the platform factory, because os.kill(pid, 0) is not a
+    valid liveness probe on Windows (raises OSError WinError 87 for a dead pid → previously crashed
+    `status`/`start`/`stop`). The factory is a core seam (lazy-imported here so daemon.py stays
+    import-light and never imports platform.* directly). Note: only win32 is routed through the
+    factory — for other non-darwin platforms the factory returns a NullProcessController whose
+    is_alive is always False, so POSIX must keep using os.kill directly."""
+    if sys.platform == "win32":
+        from yohoho.core.platform_factory import get_process_controller  # noqa: PLC0415
+        return get_process_controller().is_alive(pid)
+    return pid_alive(pid)
+
+
 class PidFile:
-    def __init__(self, data_dir: Path, *, alive: Callable[[int], bool] = pid_alive) -> None:
+    def __init__(self, data_dir: Path, *, alive: Callable[[int], bool] = _default_alive) -> None:
         self._path = Path(data_dir) / _PID_NAME
         self._alive = alive
         self.crashed_prior_run = False
