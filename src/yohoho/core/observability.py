@@ -123,12 +123,16 @@ def setup_logging(data_dir: Path, level: str = "info") -> logging.Logger:
     try:
         log_dir.mkdir(parents=True, exist_ok=True)
         # Attempt to open / append to the log file
-        with log_path.open("a"):
+        with log_path.open("a", encoding="utf-8"):
             pass
         handler = logging.handlers.RotatingFileHandler(
             log_path,
             maxBytes=1_000_000,
             backupCount=5,
+            encoding="utf-8",  # without this Windows defaults the stream to cp1252: non-cp1252 log
+                               # records (e.g. a "→" in a crash-net traceback) raise UnicodeEncodeError
+                               # and are dropped, and cp1252 bytes are then garbled by `yohoho logs`,
+                               # which reads the file back as utf-8. Matches record_error/markers/history.
         )
     except OSError as exc:
         handler = logging.StreamHandler(sys.stderr)
